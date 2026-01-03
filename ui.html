@@ -1,0 +1,279 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 12px/1.4 Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 16px; }
+      h2 { margin: 0 0 12px; font-size: 14px; }
+      .row { display: flex; gap: 8px; margin-bottom: 12px; }
+      button { padding: 8px 10px; }
+      pre { background: #f6f6f6; padding: 10px; border-radius: 8px; max-height: 220px; overflow: auto; }
+      .issue { display:flex; gap:8px; align-items:center; padding:10px; background:#f6f6f6; border-radius:10px; margin-bottom:8px; }
+      .issue-main { flex:1; }
+      .issue-title { font-weight:600; margin-bottom:4px; }
+      .issue-meta { opacity:0.75; font-size:11px; }
+      .issue button { padding:6px 8px; }
+      .fill-row {  display: inline-flex;  align-items: center;  gap: 6px;}
+      .fill-swatch { width: 12px;height: 12px;border-radius: 3px;border: 1px solid rgba(0,0,0,0.15);box-sizing: border-box;}
+      .controls { display:flex; gap:8px; align-items:center; margin: 8px 0 12px; }
+      select { padding: 6px 8px; }
+      .controls select { min-width: 180px; }
+     .group { margin: 14px 0 10px; }
+     .group-title { font-weight: 700; margin: 10px 0 8px; }
+     .group-title small { font-weight: 400; opacity: 0.7; margin-left: 6px; }
+    </style>
+  </head>
+  <body>
+    <h2>Token Auditor & Linter</h2>
+
+    <div class="row">
+      <button id="scan">Scan selection</button>
+      <button id="close">Close</button>
+    </div>
+
+    <div id="controls" style="margin-top: 10px;"></div>
+    <div id="out">Ready.</div>
+
+
+    <script>
+      const state = {
+      allIssues: [],   // сюда кладём все issues, пришедшие из code.ts
+      summary: null,
+      query: "",       // сюда кладём текст из поля Search
+      selectedType: "ALL",
+      };
+      const out = document.getElementById("out");
+      const controls = document.getElementById("controls");
+
+      document.getElementById("scan").onclick = () => {
+      parent.postMessage({ pluginMessage: { type: "scan" } }, "*");
+      out.textContent = "Scanning…";
+      controls.innerHTML = "";
+      };
+
+      document.getElementById("close").onclick = () => {
+        parent.postMessage({ pluginMessage: { type: "close" } }, "*");
+      };
+
+//
+
+    function groupByType(issues) {
+     const map = new Map();
+     for (const issue of issues) {
+     const t = issue.nodeType || "UNKNOWN";
+     if (!map.has(t)) map.set(t, []);
+      map.get(t).push(issue);
+     }
+     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+     }
+
+    function groupByNode(issues) {
+  const map = new Map();
+  for (const issue of issues) {
+    const id = issue.nodeId || "UNKNOWN";
+    if (!map.has(id)) map.set(id, []);
+    map.get(id).push(issue);
+  }
+  return Array.from(map.entries());
+}
+   
+    function normalize(s) {
+     return String(s ?? "").toLowerCase().trim();
+     }
+
+function renderControls(allIssues) {
+  const groups = groupByType(allIssues);
+
+  const total = allIssues.length;
+  const options = [
+    { value: "ALL", label: `All types (${total})` },
+    ...groups.map(([type, list]) => ({
+      value: type,
+      label: `${type} (${list.length})`
+    }))
+  ];
+
+  controls.innerHTML = `
+    <div class="controls">
+      <label style="opacity:.8;">Filter:</label>
+      <select id="typeFilter"></select>
+    </div>
+  `;
+
+  const sel = controls.querySelector("#typeFilter");
+  sel.innerHTML = options
+    .map((o) => `<option value="${o.value}">${o.label}</option>`)
+    .join("");
+
+  sel.value = state.selectedType;
+
+  sel.onchange = () => {
+    state.selectedType = sel.value;
+    renderIssues(state.allIssues, state.summary);
+  };
+}
+
+function renderIssues(allIssues, summary) {
+  if (!allIssues || allIssues.length === 0) {
+    out.textContent = "Проблем не найдено ✅";
+    state.selectedType = "ALL";
+    controls.innerHTML = "";
+    return;
+  }
+
+  // фильтруем
+  const visible =
+    state.selectedType === "ALL"
+      ? allIssues
+      : allIssues.filter((i) => i.nodeType === state.selectedType);
+
+  // шапка
+  out.innerHTML = `
+    <div style="margin-bottom:10px;">
+      Найдено проблем: <b>${allIssues.length}</b>
+      <span style="opacity:.7;">(nodes scanned: ${summary?.total ?? "?"})</span>
+      ${state.selectedType !== "ALL"
+        ? `<span style="opacity:.7;"> · showing: <b>${state.selectedType}</b> (${visible.length})</span>`
+        : ""}
+    </div>
+  `;
+
+  // группировка
+  const groups = groupByType(visible);
+
+  for (const [type, issues] of groups) {
+    const section = document.createElement("div");
+    section.className = "group";
+    section.innerHTML = `
+      <div class="group-title">
+        ${type} <small>${issues.length}</small>
+      </div>
+    `;
+
+    const nodes = groupByNode(issues);
+    for (const [nodeId, nodeIssues] of nodes) {
+      const issue = nodeIssues[0];
+      const row = document.createElement("div");
+      row.className = "issue";
+
+      const main = document.createElement("div");
+      main.className = "issue-main";
+
+      // fill строка (с квадратиком) — если есть
+      const fillLine = issue.fillValue
+  ? (() => {
+      const hex = String(issue.fillValue).split(" ")[0];
+      const nodeOpPct =
+        typeof issue.nodeOpacity === "number"
+          ? Math.round(issue.nodeOpacity * 100)
+          : 100;
+      const nodeOpText = nodeOpPct !== 100 ? ` · node ${nodeOpPct}%` : "";
+      return `
+        <div class="issue-meta" style="margin-top:6px;">
+          <span class="fill-row">
+            <span class="fill-swatch" style="background:${hex}"></span>
+            ${issue.fillValue}${nodeOpText}
+          </span>
+        </div>
+      `;
+    })()
+  : "";
+
+
+      main.innerHTML = `
+        <div class="issue-title">
+         ${issue.nodeType} · ${issue.nodeName}
+        </div>
+
+        <div class="issue-meta">
+         id: ${issue.nodeId}
+        </div>
+
+        ${typeof issue.nodeOpacity === "number"
+          ? `<div class="issue-meta">node opacity: ${Math.round(issue.nodeOpacity * 100)}%
+            </div>`
+           : ""
+          }
+        <div style="margin-top:8px;">
+         ${nodeIssues.map(i => {
+          const parts = [];
+
+          parts.push(`<div class="issue-meta" style="margin-top:6px;">${i.message}</div>`);
+
+          if (i.fillValue) {
+          const hex = String(i.fillValue).split(" ")[0];
+          parts.push(`
+           <div class="issue-meta" style="margin-top:4px;">
+            <span class="fill-row">
+             <span class="fill-swatch" style="background:${hex}"></span>
+             Fill: ${i.fillValue}
+             </span>
+           </div>
+         `);}
+
+         if (i.strokeValue) {
+         const hex = String(i.strokeValue).split(" ")[0];
+         parts.push(`
+          <div class="issue-meta" style="margin-top:4px;">
+          <span class="fill-row">
+          <span class="fill-swatch" style="background:${hex}"></span>
+          Stroke: ${i.strokeValue}
+          </span>
+          </div>`);}
+
+         return parts.join("");
+         }).join("")}
+
+        </div>
+      `;
+
+      const btn = document.createElement("button");
+      btn.textContent = "Select";
+      btn.onclick = () => {
+        parent.postMessage(
+          { pluginMessage: { type: "select-node", nodeId: issue.nodeId } },
+          "*"
+        );
+      };
+
+      row.appendChild(main);
+      row.appendChild(btn);
+      section.appendChild(row);
+    }
+
+    out.appendChild(section);
+  }
+}
+
+window.onmessage = (event) => {
+  console.log("[UI] onmessage raw:", event.data);
+  const msg = event.data.pluginMessage;
+  console.log("[UI] msg.type:", msg?.type);
+  console.log("[UI] payload:", msg?.payload);
+  if (!msg) return;
+  if (msg.type !== "scan-result") return;
+
+  const { issues, summary } = msg.payload;
+
+  state.allIssues = issues || [];
+  state.summary = summary || null;
+  console.log("[UI] first issue:", state.allIssues[0]);
+  console.log("[UI] issues count:", state.allIssues.length);
+
+
+  // 3) твой сброс фильтра, если типа больше нет
+  if (
+    state.selectedType !== "ALL" &&
+    !state.allIssues.some((i) => i.nodeType === state.selectedType)
+  ) {
+    state.selectedType = "ALL";
+  }
+  
+  renderControls(state.allIssues);
+  renderIssues(state.allIssues, state.summary);
+};
+
+console.log("[UI] first issue:", state.allIssues[0]);
+    </script>
+  </body>
+</html>

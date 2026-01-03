@@ -1,0 +1,179 @@
+"use strict";
+(() => {
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __commonJS = (cb, mod) => function __require() {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  };
+
+  // code.ts
+  var require_code = __commonJS({
+    "code.ts"() {
+      figma.showUI(__html__, { width: 520, height: 420 });
+      figma.notify("Token Auditor & Linter: \u0437\u0430\u043F\u0443\u0441\u0442\u0438\u043B\u0441\u044F \u2705");
+      var FILL_SUPPORTED_NODE_TYPES = [
+        "TEXT",
+        "RECTANGLE",
+        "ELLIPSE",
+        "FRAME",
+        "COMPONENT",
+        "COMPONENT_SET",
+        "INSTANCE",
+        "VECTOR",
+        "POLYGON",
+        "STAR"
+      ];
+      var STROKE_SUPPORTED_NODE_TYPES = [
+        "RECTANGLE",
+        "ELLIPSE",
+        "POLYGON",
+        "STAR",
+        "VECTOR",
+        "TEXT",
+        "FRAME",
+        "COMPONENT",
+        "INSTANCE",
+        "GROUP",
+        "LINE"
+      ];
+      function collectNodesDeep(nodes) {
+        const out = [];
+        const visit = (node) => {
+          out.push(node);
+          if ("children" in node) {
+            for (const child of node.children) visit(child);
+          }
+        };
+        for (const n of nodes) visit(n);
+        return out;
+      }
+      function toHex01(v) {
+        return Math.round(v * 255).toString(16).padStart(2, "0");
+      }
+      function formatSolidPaint(p) {
+        var _a;
+        const { r, g, b } = p.color;
+        const opacity = (_a = p.opacity) != null ? _a : 1;
+        let s = `#${toHex01(r)}${toHex01(g)}${toHex01(b)}`.toUpperCase();
+        if (opacity < 1) s += ` @ ${Math.round(opacity * 100)}%`;
+        return s;
+      }
+      function makeBaseIssue(node, ruleId, message) {
+        return {
+          ruleId,
+          message,
+          nodeId: node.id,
+          nodeName: node.name,
+          nodeType: node.type,
+          nodeOpacity: "opacity" in node ? node.opacity : void 0
+        };
+      }
+      function makeIssue(node, ruleId, message, extra) {
+        const base = makeBaseIssue(node, ruleId, message);
+        if (extra) Object.assign(base, extra);
+        return base;
+      }
+      function checkFillNotVariable(node) {
+        var _a;
+        if (!FILL_SUPPORTED_NODE_TYPES.includes(node.type)) return [];
+        if (!("fills" in node)) return [];
+        const fills = node.fills;
+        if (fills === figma.mixed) return [];
+        if (!Array.isArray(fills) || fills.length === 0) return [];
+        const hasAnyVisiblePaint = fills.some((p) => {
+          var _a2;
+          return ((_a2 = p.opacity) != null ? _a2 : 1) > 0;
+        });
+        if (!hasAnyVisiblePaint) return [];
+        const hasFillVarBinding = Boolean((_a = node.boundVariables) == null ? void 0 : _a.fills);
+        if (hasFillVarBinding) return [];
+        let fillValue;
+        const solid = fills.find((p) => p.type === "SOLID");
+        if (solid) fillValue = formatSolidPaint(solid);
+        return [
+          makeIssue(
+            node,
+            "fill-not-variable",
+            "Fill \u043D\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043A variable (hard-coded fill).",
+            { fillValue }
+          )
+        ];
+      }
+      function checkStrokeNotVariable(node) {
+        var _a;
+        if (!STROKE_SUPPORTED_NODE_TYPES.includes(node.type)) return [];
+        if (!("strokes" in node)) return [];
+        const strokes = node.strokes;
+        if (strokes === figma.mixed) return [];
+        if (!Array.isArray(strokes) || strokes.length === 0) return [];
+        const hasAnyVisiblePaint = strokes.some((p) => {
+          var _a2;
+          return ((_a2 = p.opacity) != null ? _a2 : 1) > 0;
+        });
+        if (!hasAnyVisiblePaint) return [];
+        const hasStrokeVarBinding = Boolean((_a = node.boundVariables) == null ? void 0 : _a.strokes);
+        if (hasStrokeVarBinding) return [];
+        let strokeValue;
+        const solid = strokes.find((p) => p.type === "SOLID");
+        if (solid) strokeValue = formatSolidPaint(solid);
+        return [
+          makeIssue(
+            node,
+            "stroke-not-variable",
+            "Stroke \u043D\u0435 \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u043D \u043A variable (hard-coded stroke).",
+            { strokeValue }
+          )
+        ];
+      }
+      function summarize(nodes) {
+        var _a;
+        const byType = {};
+        for (const n of nodes) byType[n.type] = ((_a = byType[n.type]) != null ? _a : 0) + 1;
+        return {
+          total: nodes.length,
+          byType
+        };
+      }
+      figma.ui.onmessage = async (msg) => {
+        if (msg.type === "close") {
+          figma.closePlugin();
+          return;
+        }
+        if (msg.type === "select-node") {
+          const nodeId = msg.nodeId;
+          const node = await figma.getNodeByIdAsync(nodeId);
+          if (!node) {
+            figma.notify("\u041D\u043E\u0434\u0430 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430 (\u0432\u043E\u0437\u043C\u043E\u0436\u043D\u043E \u0443\u0434\u0430\u043B\u0435\u043D\u0430).");
+            return;
+          }
+          if (node.type === "DOCUMENT" || node.type === "PAGE") {
+            figma.notify("\u041D\u0435\u043B\u044C\u0437\u044F \u0432\u044B\u0434\u0435\u043B\u0438\u0442\u044C DOCUMENT/PAGE.");
+            return;
+          }
+          const sceneNode = node;
+          figma.currentPage.selection = [sceneNode];
+          figma.viewport.scrollAndZoomIntoView([sceneNode]);
+          return;
+        }
+        if (msg.type === "scan") {
+          const selection = figma.currentPage.selection;
+          const roots = selection.length > 0 ? selection : figma.currentPage.children;
+          const all = collectNodesDeep(roots);
+          const issues = [];
+          for (const n of all) {
+            issues.push(...checkFillNotVariable(n));
+            issues.push(...checkStrokeNotVariable(n));
+          }
+          figma.ui.postMessage({
+            type: "scan-result",
+            payload: {
+              summary: summarize(all),
+              issues
+            }
+          });
+        }
+      };
+    }
+  });
+  require_code();
+})();
+//# sourceMappingURL=code.js.map
