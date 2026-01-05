@@ -372,6 +372,51 @@ function renderControls(allIssues) {
     }))
   ];
 
+  if (state.selectedProperty !== "FILL") {
+    controls.innerHTML = `
+    <div class="controls">
+      <label style="opacity:.8;">Property:</label>
+      <select id="propertyFilter">
+       <option value="FILL">FILL (${domainCounts.FILL})</option>
+       <option value="STROKE">STROKE (${domainCounts.STROKE})</option>
+       <option value="NUMERIC">NUMERIC (${domainCounts.NUMERIC})</option>
+      </select>
+      <span style="display:inline-block; width:12px;"></span>
+
+      <label style="opacity:.8;">Type:</label>
+        <select id="typeFilter"></select>
+    </div>
+  `;
+
+  const propertyFilter = document.getElementById("propertyFilter");
+  propertyFilter.value = state.selectedProperty;
+  propertyFilter.onchange = (e) => {
+    state.selectedProperty = e.target.value;
+
+    // минимально безопасный сброс при переключении домена
+    state.selectedType = "ALL";
+    state.selectedSource = "ALL";
+    state.selectedFillState = "ENABLED";
+
+    renderIssues(state.allIssues, state.summary);
+  };
+
+    const sel = controls.querySelector("#typeFilter");
+    sel.innerHTML = options
+      .map((o) => `<option value="${o.value}">${o.label}</option>`)
+      .join("");
+
+    sel.value = state.selectedType;
+
+    sel.onchange = () => {
+      state.selectedType = sel.value;
+      renderControls(state.allIssues);
+      renderIssues(state.allIssues, state.summary);
+    };
+
+    return;
+  }
+
 // counts for fillSourceKind — depend on current Type filter
   const baseForSourceCounts =
     state.selectedType === "ALL"
@@ -498,11 +543,161 @@ const domainIssues = issuesWithDomain.filter(
   (i) => i.issueDomain === state.selectedProperty
 );
 
+if (state.selectedProperty === "STROKE") {
+  renderControls(allIssues);
+  if (domainIssues.length === 0) {
+    out.textContent = "Проблем не найдено ✅";
+    return;
+  }
+
+  let visible =
+    state.selectedType === "ALL"
+      ? domainIssues
+      : domainIssues.filter((i) => i.nodeType === state.selectedType);
+
+  const filtersLabel =
+    state.selectedType !== "ALL"
+      ? ` · type: <b>${state.selectedType}</b>`
+      : "";
+
+  out.innerHTML = `
+    <div style="margin-bottom:10px;">
+     Найдено проблем: <b>${visible.length}</b>
+     <span style="opacity:.7;"> · domain: <b>${state.selectedProperty}</b> (${domainIssues.length})</span>
+     <span style="opacity:.7;">${filtersLabel}</span>
+     <span style="opacity:.7;"> (nodes scanned: ${summary?.total ?? "?"})</span>
+   </div>
+   `;
+
+  const nodes = groupByNode(visible);
+  for (const [nodeId, nodeIssues] of nodes) {
+    const issue = nodeIssues[0];
+
+    const row = document.createElement("div");
+    row.className = "issue";
+
+    const main = document.createElement("div");
+    main.className = "issue-main";
+
+    // fill строка (с квадратиком) — если есть
+    const fillLine = (issue.fillSourceKind !== "RAW" && issue.fillValue)
+      ? (() => {
+          const hex = String(issue.fillValue).split(" ")[0];
+          const nodeOpPct =
+            typeof issue.nodeOpacity === "number"
+              ? Math.round(issue.nodeOpacity * 100)
+              : 100;
+          const nodeOpText = nodeOpPct !== 100 ? ` · node ${nodeOpPct}%` : "";
+          return `
+            <div class="issue-meta" style="margin-top:6px;">
+              <span class="fill-row">
+                <span class="fill-swatch" style="background:${hex}"></span>
+                ${issue.fillValue}${nodeOpText}
+              </span>
+            </div>
+
+            ${
+              issue.fillStyleName || issue.fillStyleSource
+                ? `<div class="issue-meta" style="margin-top:4px;">
+                     Style: ${issue.fillStyleName ?? "—"} · source: ${
+                    issue.fillStyleSource ?? "—"
+                  }
+                   </div>`
+                : ""
+            }
+          `;
+        })()
+      : "";
+
+    main.innerHTML = `
+      <div class="issue-title">
+        ${issue.nodeType} · ${issue.nodeName}
+      </div>
+
+      <div class="issue-meta">
+        id: ${issue.nodeId}
+      </div>
+
+      ${
+        typeof issue.nodeOpacity === "number"
+          ? `<div class="issue-meta">node opacity: ${Math.round(issue.nodeOpacity * 100)}%</div>`
+          : ""
+      }
+
+      <div style="margin-top:8px;">
+        ${nodeIssues
+          .map((i) => {
+            const parts = [];
+
+            parts.push(
+              `<div class="issue-meta" style="margin-top:6px;">${i.message}</div>`
+            );
+
+            if (issue.fillSourceKind === "RAW" && i.fillValue) {
+              const hex = String(i.fillValue).split(" ")[0];
+              parts.push(`
+                <div class="issue-meta" style="margin-top:4px;">
+                  <span class="fill-row">
+                    <span class="fill-swatch" style="background:${hex}"></span>
+                    Fill: ${i.fillValue}
+                  </span>
+                </div>
+              `);
+            }
+
+            if (i.strokeValue) {
+              const hex = String(i.strokeValue).split(" ")[0];
+              parts.push(`
+                <div class="issue-meta" style="margin-top:4px;">
+                  <span class="fill-row">
+                    <span class="fill-swatch" style="background:${hex}"></span>
+                    Stroke: ${i.strokeValue}
+                  </span>
+                </div>
+              `);
+            }
+
+            if (issue.fillSourceKind === "RAW" && (i.fillStyleName || i.fillStyleSource)) {
+    parts.push(`
+      <div class="issue-meta" style="margin-top:4px;">
+        Style: ${i.fillStyleName ?? "—"} · source: ${i.fillStyleSource ?? "—"}
+      </div>
+    `);
+  }
+
+
+            return parts.join("");
+          })
+          .join("")}
+      </div>
+
+      ${fillLine}
+    `;
+
+    const btn = document.createElement("button");
+    btn.textContent = "Select";
+    btn.onclick = () => {
+      parent.postMessage(
+        { pluginMessage: { type: "select-node", nodeId: issue.nodeId } },
+        "*"
+      );
+    };
+
+    row.appendChild(main);
+    row.appendChild(btn);
+
+    out.appendChild(row);
+  }
+  return;
+}
+
 if (state.selectedProperty !== "FILL") {
   renderControls(allIssues);
   out.textContent = `Property=${state.selectedProperty}: UI домена пока не реализован (заглушка). Issues: ${domainIssues.length}`;
   return;
 }
+
+controls.style.overflowX = "auto";
 
 // Fill mode: домен уже ограничен issueDomain === "FILL"
 const fillIssues = domainIssues;
