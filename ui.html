@@ -21,6 +21,190 @@
      .group { margin: 14px 0 10px; }
      .group-title { font-weight: 700; margin: 10px 0 8px; }
      .group-title small { font-weight: 400; opacity: 0.7; margin-left: 6px; }
+
+     :root{
+    --bg: #ffffff;
+    --panel: #f6f6f6;
+    --panel2: #fbfbfb;
+    --text: #111;
+    --muted: #666;
+    --muted2: #888;
+    --stroke: rgba(0,0,0,.08);
+    --radius: 12px;
+  }
+
+  body { color: var(--text); }
+
+  /* общий вертикальный ритм */
+  .row { margin-bottom: 14px; }
+  .issue { margin-bottom: 10px; border: 1px solid var(--stroke); background: var(--panel2); }
+  .issue-title { line-height: 1.35; }
+  .issue-meta { color: var(--muted); }
+
+  /* групповые секции (RAW / STYLE / VARIABLE) */
+  .group-section{
+    border: 1px solid var(--stroke);
+    background: var(--panel);
+    border-radius: var(--radius);
+    padding: 10px 10px;
+    margin-bottom: 12px;
+  }
+
+  .group-title{
+    display: flex;
+    align-items: flex-start; /* чтобы второй ряд не ломал выравнивание */
+    gap: 10px;
+    padding: 10px 10px;
+    border-radius: 10px;
+  }
+
+  /* делаем кликабельность “видимой”, но не меняем логику */
+  .group-title:hover{
+    background: rgba(0,0,0,.035);
+  }
+
+  /* twisty отделяем визуально */
+  .twisty{
+    opacity: .8;
+    margin-top: 1px;
+  }
+
+  /* строка с цветом */
+  .fill-row{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+  }
+
+  .fill-swatch{
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1px solid rgba(0,0,0,.12);
+    flex: 0 0 auto;
+  }
+
+  /* suggestions как отдельная “вторая строка” */
+  .suggestions{
+    margin-top: 6px;
+    color: var(--muted2);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  .suggestions code{
+    background: rgba(0,0,0,.04);
+    border: 1px solid rgba(0,0,0,.06);
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-right: 6px;
+    white-space: nowrap;
+  }  
+  /* если где-то .group-title используется как обычный заголовок группы */
+  .group > .group-title{
+  display: block;
+  padding: 0;
+}
+/* header layout: left content + right count */
+.group-title{
+  justify-content: space-between;
+}
+
+.group-left{
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.group-main{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.group-topline{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.group-count{
+  color: var(--muted2);
+  font-size: 11px;
+  margin-left: 12px;
+  white-space: nowrap;
+}
+
+/* suggestions line */
+.suggestions{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0; /* у нас gap в колонке */
+}
+
+.suggestions .s-chip{
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  background: rgba(0,0,0,.04);
+  border: 1px solid rgba(0,0,0,.06);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted2);
+  max-width: 100%;
+}
+
+.suggestions .s-kind{
+  opacity: .85;
+  font-weight: 600;
+}
+.suggestions .s-name{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px; /* чтобы не растягивало плашку бесконечно */
+}
+/* count badge рядом с цветом */
+.count-pill{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(0,0,0,.06);
+  border: 1px solid rgba(0,0,0,.08);
+  color: var(--muted2);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* подпись перед списком предложений */
+.s-label{
+  color: var(--muted2);
+  font-size: 11px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+/* уровни вложенности */
+.indent-0 { margin-left: 0; }
+.indent-1 { margin-left: 16px; }
+
+/* тело вложенной группы (карточки нод) */
+.nested-block{
+  margin-left: 20px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(0,0,0,.08);
+}
+
+
+
     </style>
   </head>
   <body>
@@ -37,11 +221,18 @@
 
     <script>
       const state = {
+      rawFills: [],
+      rawSuggestionsByHex: {},
       allIssues: [],   // сюда кладём все issues, пришедшие из code.ts
       summary: null,
-      query: "",       // сюда кладём текст из поля Search
       selectedType: "ALL",
+      selectedSource: "ALL",
+      selectedFillState: "ENABLED", // ENABLED | DISABLED | ALL
+      selectedProperty: "FILL", // FILL | STROKE | NUMERIC
+      
+      query: "",       // сюда кладём текст из поля Search
       };
+
       const out = document.getElementById("out");
       const controls = document.getElementById("controls");
 
@@ -57,7 +248,7 @@
 
 //
 
-    function groupByType(issues) {
+function groupByType(issues) {
      const map = new Map();
      for (const issue of issues) {
      const t = issue.nodeType || "UNKNOWN";
@@ -67,7 +258,7 @@
      return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
      }
 
-    function groupByNode(issues) {
+function groupByNode(issues) {
   const map = new Map();
   for (const issue of issues) {
     const id = issue.nodeId || "UNKNOWN";
@@ -76,15 +267,102 @@
   }
   return Array.from(map.entries());
 }
-   
-    function normalize(s) {
-     return String(s ?? "").toLowerCase().trim();
-     }
+
+function groupBySourceKind(issues) {
+  const order = ["RAW", "STYLE", "VARIABLE"];
+  const buckets = new Map();
+
+  // init buckets so order is stable even when empty (we’ll skip empty later)
+  for (const k of order) buckets.set(k, []);
+
+  for (const i of issues) {
+    const k = i.fillSourceKind || "RAW";
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(i);
+  }
+
+  // return as array of [kind, issues[]] in desired order (+ any unknown kinds at end)
+  const result = [];
+  for (const k of order) result.push([k, buckets.get(k)]);
+
+  for (const [k, arr] of buckets.entries()) {
+    if (!order.includes(k)) result.push([k, arr]);
+  }
+
+  return result;
+}
+
+function groupByFillValue(issues) {
+  const map = new Map();
+
+  for (const i of issues) {
+    const key = i.fillValue ? String(i.fillValue) : "—";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(i);
+  }
+
+  // sort by count desc, then by key
+  return [...map.entries()].sort((a, b) => {
+    const dc = b[1].length - a[1].length;
+    if (dc !== 0) return dc;
+    return String(a[0]).localeCompare(String(b[0]));
+  });
+}
+
+function groupByFillStyleName(list) {
+  const map = new Map();
+  for (const i of list) {
+    const key = i.fillStyleName || "(unnamed style)";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(i);
+  }
+  return [...map.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+}
+
+function groupByFillVariableName(list) {
+  const map = new Map();
+  for (const i of list) {
+    const key = i.fillVariableName || "(unknown variable)";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(i);
+  }
+  return [...map.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+}
+
+function normalize(s) {
+return String(s ?? "").toLowerCase().trim();
+ }
 
 function renderControls(allIssues) {
-  const groups = groupByType(allIssues);
+  const issuesWithDomain = allIssues.map((i) => ({
+    ...i,
+    issueDomain:
+  i.issueDomain ??
+  (String(i.ruleId || "").startsWith("stroke-")
+    ? "STROKE"
+    : String(i.ruleId || "").startsWith("fill-")
+      ? "FILL"
+      : "NUMERIC"),
 
-  const total = allIssues.length;
+  }));
+
+  const domainCounts = {
+    FILL: issuesWithDomain.filter((i) => i.issueDomain === "FILL").length,
+    STROKE: issuesWithDomain.filter((i) => i.issueDomain === "STROKE").length,
+    NUMERIC: issuesWithDomain.filter((i) => i.issueDomain === "NUMERIC").length,
+  };
+
+  const domainIssues = issuesWithDomain.filter(
+    (i) => i.issueDomain === state.selectedProperty
+  );
+
+ // FILL controls считаются по домену напрямую (без скрытых фильтров)
+  const controlIssues = domainIssues;
+
+  const groups = groupByType(controlIssues);
+
+  const total = controlIssues.length;
+
   const options = [
     { value: "ALL", label: `All types (${total})` },
     ...groups.map(([type, list]) => ({
@@ -93,12 +371,74 @@ function renderControls(allIssues) {
     }))
   ];
 
+// counts for fillSourceKind — depend on current Type filter
+  const baseForSourceCounts =
+    state.selectedType === "ALL"
+    ? controlIssues
+    : controlIssues.filter((i) => i.nodeType === state.selectedType);
+
+  const srcCounts = { RAW: 0, STYLE: 0, VARIABLE: 0 };
+  for (const i of baseForSourceCounts) {
+    const k = i.fillSourceKind;
+    if (k === "RAW" || k === "STYLE" || k === "VARIABLE") srcCounts[k]++;
+  }
+  const srcTotal = baseForSourceCounts.length;
+
+  // counts for fillEnabled — depend on current Type + Source filter
+const baseForFillStateCounts =
+  state.selectedSource === "ALL"
+    ? baseForSourceCounts
+    : baseForSourceCounts.filter((i) => i.fillSourceKind === state.selectedSource);
+
+// Fill state counts считаем по текущей базе (Type + Source)
+const enabledCount = baseForFillStateCounts.filter((i) => i.fillEnabled !== false).length;
+const disabledCount = baseForFillStateCounts.filter((i) => i.fillEnabled === false).length;
+const fillStateTotal = baseForFillStateCounts.length;
+
+
+
   controls.innerHTML = `
-    <div class="controls">
-      <label style="opacity:.8;">Filter:</label>
+  <div class="controls">
+    <label style="opacity:.8;">Property:</label>
+    <select id="propertyFilter">
+     <option value="FILL">FILL (${domainCounts.FILL})</option>
+     <option value="STROKE">STROKE (${domainCounts.STROKE})</option>
+     <option value="NUMERIC">NUMERIC (${domainCounts.NUMERIC})</option>
+    </select>
+    <span style="display:inline-block; width:12px;"></span>
+
+    <label style="opacity:.8;">Type:</label>
       <select id="typeFilter"></select>
-    </div>
-  `;
+
+    <label style="opacity:.8; margin-left:10px;">Fill source:</label>
+    <select id="sourceFilter">
+      <option value="ALL">All sources (${srcTotal})</option>
+      <option value="RAW">RAW (${srcCounts.RAW})</option>
+      <option value="STYLE">STYLE (${srcCounts.STYLE})</option>
+      <option value="VARIABLE">VARIABLE (${srcCounts.VARIABLE})</option>
+    </select>
+
+    <label style="opacity:.8; margin-left:10px;">Fill state:</label>
+    <select id="fillStateFilter">
+      <option value="ENABLED">Enabled (${enabledCount})</option>
+      <option value="DISABLED">Disabled (${disabledCount})</option>
+      <option value="ALL">All (${fillStateTotal})</option>
+    </select>
+  </div>
+`;
+const propertyFilter = document.getElementById("propertyFilter");
+propertyFilter.value = state.selectedProperty;
+propertyFilter.onchange = (e) => {
+  state.selectedProperty = e.target.value;
+
+  // минимально безопасный сброс при переключении домена
+  state.selectedType = "ALL";
+  state.selectedSource = "ALL";
+  state.selectedFillState = "ENABLED";
+
+  renderIssues(state.allIssues, state.summary);
+};
+
 
   const sel = controls.querySelector("#typeFilter");
   sel.innerHTML = options
@@ -109,8 +449,28 @@ function renderControls(allIssues) {
 
   sel.onchange = () => {
     state.selectedType = sel.value;
+    renderControls(state.allIssues); // обновит счётчики source + fillState под текущий Type
     renderIssues(state.allIssues, state.summary);
   };
+
+  const srcSel = controls.querySelector("#sourceFilter");
+  srcSel.value = state.selectedSource;
+
+  srcSel.onchange = () => {
+    state.selectedSource = srcSel.value;
+    renderControls(state.allIssues); // важно: обновить counts для Fill state
+    renderIssues(state.allIssues, state.summary);
+  };
+
+  const fsSel = controls.querySelector("#fillStateFilter");
+  fsSel.value = state.selectedFillState;
+
+  fsSel.onchange = () => {
+    state.selectedFillState = fsSel.value;
+    renderIssues(state.allIssues, state.summary);
+  };
+
+
 }
 
 function renderIssues(allIssues, summary) {
@@ -120,130 +480,439 @@ function renderIssues(allIssues, summary) {
     controls.innerHTML = "";
     return;
   }
+  
+const issuesWithDomain = allIssues.map((i) => ({
+  ...i,
+  issueDomain:
+  i.issueDomain ??
+  (String(i.ruleId || "").startsWith("stroke-")
+    ? "STROKE"
+    : String(i.ruleId || "").startsWith("fill-")
+      ? "FILL"
+      : "NUMERIC"),
 
-  // фильтруем
-  const visible =
-    state.selectedType === "ALL"
-      ? allIssues
-      : allIssues.filter((i) => i.nodeType === state.selectedType);
+}));
+
+const domainIssues = issuesWithDomain.filter(
+  (i) => i.issueDomain === state.selectedProperty
+);
+
+if (state.selectedProperty !== "FILL") {
+  renderControls(allIssues);
+  out.textContent = `Property=${state.selectedProperty}: UI домена пока не реализован (заглушка). Issues: ${domainIssues.length}`;
+  return;
+}
+
+// Fill mode: домен уже ограничен issueDomain === "FILL"
+const fillIssues = domainIssues;
+
+
+// фильтруем
+let visible =
+  state.selectedType === "ALL"
+    ? fillIssues
+    : fillIssues.filter((i) => i.nodeType === state.selectedType);
+
+  if (state.selectedSource !== "ALL") {
+    visible = visible.filter((i) => i.fillSourceKind === state.selectedSource);
+  }
+
+
+// Fill state filter (enabled/disabled)
+// When filtering by fill state, we only keep issues that actually have fillEnabled (i.e. fill-issues)
+if (state.selectedFillState !== "ALL") {
+  const wantDisabled = state.selectedFillState === "DISABLED";
+  visible = visible.filter((i) => {
+    // если вдруг у issue нет fillEnabled, считаем её "enabled" (fail-safe)
+    const enabled = i.fillEnabled !== false;
+    return wantDisabled ? !enabled : enabled;
+  });
+}
+
+// --- Palette (Top fill colors) — based on visible RAW issues only ---
+  const paletteMap = new Map();
+
+  for (const i of visible) {
+    if (i.fillSourceKind !== "RAW" || !i.fillValue) continue;
+
+    paletteMap.set(
+      i.fillValue,
+      (paletteMap.get(i.fillValue) ?? 0) + 1
+    );
+  }
+
+  const top = [...paletteMap.entries()]
+    .map(([fillValue, count]) => {
+      const hex = String(fillValue).split(" ")[0];
+      const alpha = String(fillValue).includes("@")
+        ? parseFloat(String(fillValue).split("@")[1]) / 100
+        : 1;
+
+      return { hex, alpha, count };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+   // --- Palette source: only visible RAW fills ---
+  const paletteSource = visible.filter(
+    (i) => i.fillSourceKind === "RAW" && i.fillValue
+  );
+
+
+ const paletteHtml = top.length
+   ? `
+    <div style="margin:10px 0 12px;">
+      <div style="font-weight:700; margin-bottom:6px;">Top fill colors</div>
+      ${top
+        .map((c) => {
+          const pct = Math.round((c.alpha ?? 1) * 100);
+          return `
+            <div class="issue-meta" style="margin-top:4px;">
+              <span class="fill-row">
+                <span class="fill-swatch" style="background:${c.hex}"></span>
+                ${c.hex}${pct !== 100 ? ` @ ${pct}%` : ""} · ${c.count}
+              </span>
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `
+  : "";
+
+const filtersLabel =
+  (state.selectedType !== "ALL"
+    ? ` · type: <b>${state.selectedType}</b>`
+    : "") +
+  (state.selectedSource !== "ALL"
+    ? ` · source: <b>${state.selectedSource}</b>`
+    : "") +
+  (state.selectedFillState !== "ALL"
+    ? ` · fill state: <b>${state.selectedFillState}</b>`
+    : "");
+
 
   // шапка
   out.innerHTML = `
     <div style="margin-bottom:10px;">
-      Найдено проблем: <b>${allIssues.length}</b>
-      <span style="opacity:.7;">(nodes scanned: ${summary?.total ?? "?"})</span>
-      ${state.selectedType !== "ALL"
-        ? `<span style="opacity:.7;"> · showing: <b>${state.selectedType}</b> (${visible.length})</span>`
-        : ""}
-    </div>
-  `;
+     Найдено проблем: <b>${visible.length}</b>
+     <span style="opacity:.7;"> · domain: <b>${state.selectedProperty}</b> (${domainIssues.length})</span>
+     <span style="opacity:.7;">${filtersLabel}</span>
+     <span style="opacity:.7;"> (nodes scanned: ${summary?.total ?? "?"})</span>
+   </div>
+    ${paletteHtml}
+   `;
 
-  // группировка
-  const groups = groupByType(visible);
+    // группировка: SourceKind → Type → Node
+  const sourceGroups = groupBySourceKind(visible);
 
-  for (const [type, issues] of groups) {
-    const section = document.createElement("div");
-    section.className = "group";
-    section.innerHTML = `
-      <div class="group-title">
-        ${type} <small>${issues.length}</small>
+  for (const [sourceKind, sourceIssues] of sourceGroups) {
+    if (!sourceIssues || sourceIssues.length === 0) continue;
+
+    // Source header block
+    const sourceSection = document.createElement("div");
+    sourceSection.className = "group";
+       sourceSection.innerHTML = `
+      <div class="group-title source-title indent-0" data-kind="${sourceKind}" style="cursor:pointer; user-select:none;">
+        <span class="twisty" style="display:inline-block; width:16px;">▾</span>
+        ${sourceKind} <small>${sourceIssues.length}</small>
       </div>
+      <div class="source-body"></div>
     `;
 
-    const nodes = groupByNode(issues);
-    for (const [nodeId, nodeIssues] of nodes) {
-      const issue = nodeIssues[0];
-      const row = document.createElement("div");
-      row.className = "issue";
+    out.appendChild(sourceSection);
 
-      const main = document.createElement("div");
-      main.className = "issue-main";
-
-      // fill строка (с квадратиком) — если есть
-      const fillLine = issue.fillValue
-  ? (() => {
-      const hex = String(issue.fillValue).split(" ")[0];
-      const nodeOpPct =
-        typeof issue.nodeOpacity === "number"
-          ? Math.round(issue.nodeOpacity * 100)
-          : 100;
-      const nodeOpText = nodeOpPct !== 100 ? ` · node ${nodeOpPct}%` : "";
-      return `
-        <div class="issue-meta" style="margin-top:6px;">
-          <span class="fill-row">
-            <span class="fill-swatch" style="background:${hex}"></span>
-            ${issue.fillValue}${nodeOpText}
-          </span>
-        </div>
-      `;
-    })()
-  : "";
-
-
-      main.innerHTML = `
-        <div class="issue-title">
-         ${issue.nodeType} · ${issue.nodeName}
-        </div>
-
-        <div class="issue-meta">
-         id: ${issue.nodeId}
-        </div>
-
-        ${typeof issue.nodeOpacity === "number"
-          ? `<div class="issue-meta">node opacity: ${Math.round(issue.nodeOpacity * 100)}%
-            </div>`
-           : ""
-          }
-        <div style="margin-top:8px;">
-         ${nodeIssues.map(i => {
-          const parts = [];
-
-          parts.push(`<div class="issue-meta" style="margin-top:6px;">${i.message}</div>`);
-
-          if (i.fillValue) {
-          const hex = String(i.fillValue).split(" ")[0];
-          parts.push(`
-           <div class="issue-meta" style="margin-top:4px;">
-            <span class="fill-row">
-             <span class="fill-swatch" style="background:${hex}"></span>
-             Fill: ${i.fillValue}
-             </span>
-           </div>
-         `);}
-
-         if (i.strokeValue) {
-         const hex = String(i.strokeValue).split(" ")[0];
-         parts.push(`
-          <div class="issue-meta" style="margin-top:4px;">
-          <span class="fill-row">
-          <span class="fill-swatch" style="background:${hex}"></span>
-          Stroke: ${i.strokeValue}
-          </span>
-          </div>`);}
-
-         return parts.join("");
-         }).join("")}
-
-        </div>
-      `;
-
-      const btn = document.createElement("button");
-      btn.textContent = "Select";
-      btn.onclick = () => {
-        parent.postMessage(
-          { pluginMessage: { type: "select-node", nodeId: issue.nodeId } },
-          "*"
-        );
-      };
-
-      row.appendChild(main);
-      row.appendChild(btn);
-      section.appendChild(row);
+    const titleEl = sourceSection.querySelector(".source-title");
+    const bodyEl = sourceSection.querySelector(".source-body");
+    const twistyEl = sourceSection.querySelector(".twisty");
+    
+    
+    // default collapse: keep RAW open, collapse others
+    if (sourceKind !== "RAW") {
+      bodyEl.style.display = "none";
+      twistyEl.textContent = "▸";
     }
 
-    out.appendChild(section);
+    titleEl.onclick = () => {
+      const isHidden = bodyEl.style.display === "none";
+      bodyEl.style.display = isHidden ? "" : "none";
+      twistyEl.textContent = isHidden ? "▾" : "▸";
+    };
+
+      const groups =
+       sourceKind === "RAW"
+        ? groupByFillValue(sourceIssues)
+      : sourceKind === "STYLE"
+        ? groupByFillStyleName(sourceIssues)
+      : sourceKind === "VARIABLE"
+        ? groupByFillVariableName(sourceIssues)
+        : groupByType(sourceIssues);
+
+for (const [groupKey, issues] of groups) {
+  const section = document.createElement("div");
+  section.className = "group";
+  section.style.marginTop = "10px";
+
+  // --- header (different for RAW vs others) ---
+  if (sourceKind === "RAW") {
+    const fillText = String(groupKey);
+    const hex = fillText.split(" ")[0];
+    const suggestions = (state.rawSuggestionsByHex && state.rawSuggestionsByHex[hex]) || [];
+    const suggestionsHtml = suggestions.length
+    ? `<div class="suggestions">
+      ${suggestions.map((s) =>
+        `<span class="s-chip"><span class="s-kind">${s.kind}</span><span class="s-name">${s.name}</span></span>`
+      ).join("")}
+     </div>`
+  : "";
+
+section.innerHTML = `
+  <div class="group-title raw-color-title indent-1" style="font-weight:600; cursor:pointer; user-select:none;">
+    <div class="group-left">
+      <span class="twisty" style="display:inline-block; width:16px;">▾</span>
+      <div class="group-main">
+        <div class="group-topline">
+          <span class="fill-row">
+            <span class="fill-swatch" style="background:${hex}"></span>
+            ${fillText}
+            <span class="count-pill">${issues.length}</span>
+          </span>
+        </div>
+        ${suggestionsHtml}
+      </div>
+    </div>
+  </div>
+  <div class="raw-color-body nested-block"></div>
+`;
+
+
+    // collapse/expand by click
+    const titleEl = section.querySelector(".raw-color-title");
+    const bodyEl = section.querySelector(".raw-color-body");
+    const twistyEl = section.querySelector(".twisty");
+
+if (titleEl && bodyEl && twistyEl) {
+  // default collapse for RAW colors
+  bodyEl.style.display = "none";
+  twistyEl.textContent = "▸";
+
+  // 1) collapse/expand ONLY when clicking the twisty arrow
+  twistyEl.style.cursor = "pointer";
+  twistyEl.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const isHidden = bodyEl.style.display === "none";
+    bodyEl.style.display = isHidden ? "" : "none";
+    twistyEl.textContent = isHidden ? "▾" : "▸";
+  };
+
+  // 2) select all nodes when clicking the color title (but NOT the twisty)
+  titleEl.style.cursor = "pointer";
+  titleEl.onclick = (e) => {
+    // если кликнули по стрелке — ничего не делаем (её обработчик выше)
+    if (e.target === twistyEl) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const nodeIds = Array.from(new Set(issues.map((i) => i.nodeId)));
+    parent.postMessage(
+      { pluginMessage: { type: "select-nodes", nodeIds } },
+      "*"
+    );
+  };
+
+  titleEl.title = "Click title: select all · Click arrow: collapse/expand";
+}
+
+  } else {
+  // label for STYLE / VARIABLE groups
+  const sourceLabel =
+    sourceKind === "STYLE"
+      ? issues[0]?.fillStyleSource
+      : sourceKind === "VARIABLE"
+        ? issues[0]?.fillVariableSource
+        : undefined;
+
+  section.innerHTML = `
+    <div class="group-title named-group-title" style="font-weight:600; cursor:pointer; user-select:none;">
+      <span class="twisty" style="display:inline-block; width:16px;">▾</span>
+      ${groupKey}
+      ${sourceLabel ? `<span style="opacity:.7;"> · ${sourceLabel}</span>` : ""}
+      <small style="margin-left:6px;">${issues.length}</small>
+    </div>
+    <div class="named-group-body"></div>
+  `;
+
+  const titleEl = section.querySelector(".named-group-title");
+  const bodyEl = section.querySelector(".named-group-body");
+  const twistyEl = section.querySelector(".twisty");
+
+  if (titleEl && bodyEl && twistyEl) {
+    // default collapse (same behavior as RAW colors)
+    bodyEl.style.display = "none";
+    twistyEl.textContent = "▸";
+
+    // collapse/expand ONLY on arrow
+    twistyEl.style.cursor = "pointer";
+    twistyEl.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const isHidden = bodyEl.style.display === "none";
+      bodyEl.style.display = isHidden ? "" : "none";
+      twistyEl.textContent = isHidden ? "▾" : "▸";
+    };
+
+    // click title selects all nodes in the group (but not arrow)
+    titleEl.onclick = (e) => {
+      if (e.target === twistyEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const nodeIds = Array.from(new Set(issues.map((i) => i.nodeId)));
+      parent.postMessage(
+        { pluginMessage: { type: "select-nodes", nodeIds } },
+        "*"
+      );
+    };
+
+    titleEl.title = "Click title: select all · Click arrow: collapse/expand";
   }
 }
+
+
+  // --- IMPORTANT: where to append rows ---
+const groupBody =
+  sourceKind === "RAW"
+    ? section.querySelector(".raw-color-body")
+    : section.querySelector(".named-group-body");
+
+const target = groupBody || section;
+
+
+  const nodes = groupByNode(issues);
+  for (const [nodeId, nodeIssues] of nodes) {
+  const issue = nodeIssues[0];
+
+  const row = document.createElement("div");
+  row.className = "issue";
+
+  const main = document.createElement("div");
+  main.className = "issue-main";
+
+  // fill строка (с квадратиком) — если есть
+    const fillLine = (issue.fillSourceKind !== "RAW" && issue.fillValue)
+    ? (() => {
+        const hex = String(issue.fillValue).split(" ")[0];
+        const nodeOpPct =
+          typeof issue.nodeOpacity === "number"
+            ? Math.round(issue.nodeOpacity * 100)
+            : 100;
+        const nodeOpText = nodeOpPct !== 100 ? ` · node ${nodeOpPct}%` : "";
+        return `
+          <div class="issue-meta" style="margin-top:6px;">
+            <span class="fill-row">
+              <span class="fill-swatch" style="background:${hex}"></span>
+              ${issue.fillValue}${nodeOpText}
+            </span>
+          </div>
+
+          ${
+            issue.fillStyleName || issue.fillStyleSource
+              ? `<div class="issue-meta" style="margin-top:4px;">
+                   Style: ${issue.fillStyleName ?? "—"} · source: ${
+                  issue.fillStyleSource ?? "—"
+                }
+                 </div>`
+              : ""
+          }
+        `;
+      })()
+    : "";
+
+  main.innerHTML = `
+    <div class="issue-title">
+      ${issue.nodeType} · ${issue.nodeName}
+    </div>
+
+    <div class="issue-meta">
+      id: ${issue.nodeId}
+    </div>
+
+    ${
+      typeof issue.nodeOpacity === "number"
+        ? `<div class="issue-meta">node opacity: ${Math.round(issue.nodeOpacity * 100)}%</div>`
+        : ""
+    }
+
+    <div style="margin-top:8px;">
+      ${nodeIssues
+        .map((i) => {
+          const parts = [];
+
+          parts.push(
+            `<div class="issue-meta" style="margin-top:6px;">${i.message}</div>`
+          );
+
+          if (issue.fillSourceKind === "RAW" && i.fillValue) {
+            const hex = String(i.fillValue).split(" ")[0];
+            parts.push(`
+              <div class="issue-meta" style="margin-top:4px;">
+                <span class="fill-row">
+                  <span class="fill-swatch" style="background:${hex}"></span>
+                  Fill: ${i.fillValue}
+                </span>
+              </div>
+            `);
+          }
+
+          if (i.strokeValue) {
+            const hex = String(i.strokeValue).split(" ")[0];
+            parts.push(`
+              <div class="issue-meta" style="margin-top:4px;">
+                <span class="fill-row">
+                  <span class="fill-swatch" style="background:${hex}"></span>
+                  Stroke: ${i.strokeValue}
+                </span>
+              </div>
+            `);
+          }
+
+          if (issue.fillSourceKind === "RAW" && (i.fillStyleName || i.fillStyleSource)) {
+  parts.push(`
+    <div class="issue-meta" style="margin-top:4px;">
+      Style: ${i.fillStyleName ?? "—"} · source: ${i.fillStyleSource ?? "—"}
+    </div>
+  `);
+}
+
+
+          return parts.join("");
+        })
+        .join("")}
+    </div>
+
+    ${fillLine}
+  `;
+
+  const btn = document.createElement("button");
+  btn.textContent = "Select";
+  btn.onclick = () => {
+    parent.postMessage(
+      { pluginMessage: { type: "select-node", nodeId: issue.nodeId } },
+      "*"
+    );
+  };
+
+  row.appendChild(main);
+  row.appendChild(btn);
+
+  target.appendChild(row);
+}
+
+  sourceSection.querySelector(".source-body").appendChild(section);
+}}}
 
 window.onmessage = (event) => {
   console.log("[UI] onmessage raw:", event.data);
@@ -253,12 +922,16 @@ window.onmessage = (event) => {
   if (!msg) return;
   if (msg.type !== "scan-result") return;
 
-  const { issues, summary } = msg.payload;
-
+  const { issues, summary, rawFills, rawSuggestionsByHex } = msg.payload;
   state.allIssues = issues || [];
   state.summary = summary || null;
+  state.rawFills = rawFills || [];
+  state.rawSuggestionsByHex = rawSuggestionsByHex || {};
+
+
   console.log("[UI] first issue:", state.allIssues[0]);
   console.log("[UI] issues count:", state.allIssues.length);
+  console.log("[UI] first issue style fields:", state.allIssues[0]?.fillStyleName, state.allIssues[0]?.fillStyleSource);
 
 
   // 3) твой сброс фильтра, если типа больше нет
