@@ -372,29 +372,37 @@ function renderControls(allIssues) {
     }))
   ];
 
-// counts for fillSourceKind — depend on current Type filter
+const isFillProperty = state.selectedProperty === "FILL";
+let srcCounts = { RAW: 0, STYLE: 0, VARIABLE: 0 };
+let srcTotal = 0;
+let enabledCount = 0;
+let disabledCount = 0;
+let fillStateTotal = 0;
+
+if (isFillProperty) {
+  // counts for fillSourceKind — depend on current Type filter
   const baseForSourceCounts =
     state.selectedType === "ALL"
     ? controlIssues
     : controlIssues.filter((i) => i.nodeType === state.selectedType);
 
-  const srcCounts = { RAW: 0, STYLE: 0, VARIABLE: 0 };
   for (const i of baseForSourceCounts) {
     const k = i.fillSourceKind;
     if (k === "RAW" || k === "STYLE" || k === "VARIABLE") srcCounts[k]++;
   }
-  const srcTotal = baseForSourceCounts.length;
+  srcTotal = baseForSourceCounts.length;
 
   // counts for fillEnabled — depend on current Type + Source filter
-const baseForFillStateCounts =
-  state.selectedSource === "ALL"
-    ? baseForSourceCounts
-    : baseForSourceCounts.filter((i) => i.fillSourceKind === state.selectedSource);
+  const baseForFillStateCounts =
+    state.selectedSource === "ALL"
+      ? baseForSourceCounts
+      : baseForSourceCounts.filter((i) => i.fillSourceKind === state.selectedSource);
 
-// Fill state counts считаем по текущей базе (Type + Source)
-const enabledCount = baseForFillStateCounts.filter((i) => i.fillEnabled !== false).length;
-const disabledCount = baseForFillStateCounts.filter((i) => i.fillEnabled === false).length;
-const fillStateTotal = baseForFillStateCounts.length;
+  // Fill state counts считаем по текущей базе (Type + Source)
+  enabledCount = baseForFillStateCounts.filter((i) => i.fillEnabled !== false).length;
+  disabledCount = baseForFillStateCounts.filter((i) => i.fillEnabled === false).length;
+  fillStateTotal = baseForFillStateCounts.length;
+}
 
 
 
@@ -411,6 +419,7 @@ const fillStateTotal = baseForFillStateCounts.length;
     <label style="opacity:.8;">Type:</label>
       <select id="typeFilter"></select>
 
+    ${isFillProperty ? `
     <label style="opacity:.8; margin-left:10px;">Fill source:</label>
     <select id="sourceFilter">
       <option value="ALL">All sources (${srcTotal})</option>
@@ -425,6 +434,7 @@ const fillStateTotal = baseForFillStateCounts.length;
       <option value="DISABLED">Disabled (${disabledCount})</option>
       <option value="ALL">All (${fillStateTotal})</option>
     </select>
+    ` : ""}
   </div>
 `;
 const propertyFilter = document.getElementById("propertyFilter");
@@ -437,6 +447,7 @@ propertyFilter.onchange = (e) => {
   state.selectedSource = "ALL";
   state.selectedFillState = "ENABLED";
 
+  renderControls(state.allIssues);
   renderIssues(state.allIssues, state.summary);
 };
 
@@ -454,22 +465,24 @@ propertyFilter.onchange = (e) => {
     renderIssues(state.allIssues, state.summary);
   };
 
-  const srcSel = controls.querySelector("#sourceFilter");
-  srcSel.value = state.selectedSource;
+  if (isFillProperty) {
+    const srcSel = controls.querySelector("#sourceFilter");
+    srcSel.value = state.selectedSource;
 
-  srcSel.onchange = () => {
-    state.selectedSource = srcSel.value;
-    renderControls(state.allIssues); // важно: обновить counts для Fill state
-    renderIssues(state.allIssues, state.summary);
-  };
+    srcSel.onchange = () => {
+      state.selectedSource = srcSel.value;
+      renderControls(state.allIssues); // важно: обновить counts для Fill state
+      renderIssues(state.allIssues, state.summary);
+    };
 
-  const fsSel = controls.querySelector("#fillStateFilter");
-  fsSel.value = state.selectedFillState;
+    const fsSel = controls.querySelector("#fillStateFilter");
+    fsSel.value = state.selectedFillState;
 
-  fsSel.onchange = () => {
-    state.selectedFillState = fsSel.value;
-    renderIssues(state.allIssues, state.summary);
-  };
+    fsSel.onchange = () => {
+      state.selectedFillState = fsSel.value;
+      renderIssues(state.allIssues, state.summary);
+    };
+  }
 
 
 }
@@ -498,30 +511,22 @@ const domainIssues = issuesWithDomain.filter(
   (i) => i.issueDomain === state.selectedProperty
 );
 
-if (state.selectedProperty !== "FILL") {
-  renderControls(allIssues);
-  out.textContent = `Property=${state.selectedProperty}: UI домена пока не реализован (заглушка). Issues: ${domainIssues.length}`;
-  return;
-}
-
-// Fill mode: домен уже ограничен issueDomain === "FILL"
-const fillIssues = domainIssues;
-
+const isFillProperty = state.selectedProperty === "FILL";
 
 // фильтруем
 let visible =
   state.selectedType === "ALL"
-    ? fillIssues
-    : fillIssues.filter((i) => i.nodeType === state.selectedType);
+    ? domainIssues
+    : domainIssues.filter((i) => i.nodeType === state.selectedType);
 
-  if (state.selectedSource !== "ALL") {
+  if (isFillProperty && state.selectedSource !== "ALL") {
     visible = visible.filter((i) => i.fillSourceKind === state.selectedSource);
   }
 
 
 // Fill state filter (enabled/disabled)
 // When filtering by fill state, we only keep issues that actually have fillEnabled (i.e. fill-issues)
-if (state.selectedFillState !== "ALL") {
+if (isFillProperty && state.selectedFillState !== "ALL") {
   const wantDisabled = state.selectedFillState === "DISABLED";
   visible = visible.filter((i) => {
     // если вдруг у issue нет fillEnabled, считаем её "enabled" (fail-safe)
@@ -531,64 +536,68 @@ if (state.selectedFillState !== "ALL") {
 }
 
 // --- Palette (Top fill colors) — based on visible RAW issues only ---
-  const paletteMap = new Map();
+  let paletteHtml = "";
 
-  for (const i of visible) {
-    if (i.fillSourceKind !== "RAW" || !i.fillValue) continue;
+  if (isFillProperty) {
+    const paletteMap = new Map();
 
-    paletteMap.set(
-      i.fillValue,
-      (paletteMap.get(i.fillValue) ?? 0) + 1
+    for (const i of visible) {
+      if (i.fillSourceKind !== "RAW" || !i.fillValue) continue;
+
+      paletteMap.set(
+        i.fillValue,
+        (paletteMap.get(i.fillValue) ?? 0) + 1
+      );
+    }
+
+    const top = [...paletteMap.entries()]
+      .map(([fillValue, count]) => {
+        const hex = String(fillValue).split(" ")[0];
+        const alpha = String(fillValue).includes("@")
+          ? parseFloat(String(fillValue).split("@")[1]) / 100
+          : 1;
+
+        return { hex, alpha, count };
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    // --- Palette source: only visible RAW fills ---
+    const paletteSource = visible.filter(
+      (i) => i.fillSourceKind === "RAW" && i.fillValue
     );
+
+
+   paletteHtml = top.length
+     ? `
+      <div style="margin:10px 0 12px;">
+        <div style="font-weight:700; margin-bottom:6px;">Top fill colors</div>
+        ${top
+          .map((c) => {
+            const pct = Math.round((c.alpha ?? 1) * 100);
+            return `
+              <div class="issue-meta" style="margin-top:4px;">
+                <span class="fill-row">
+                  <span class="fill-swatch" style="background:${c.hex}"></span>
+                  ${c.hex}${pct !== 100 ? ` @ ${pct}%` : ""} · ${c.count}
+                </span>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    `
+    : "";
   }
-
-  const top = [...paletteMap.entries()]
-    .map(([fillValue, count]) => {
-      const hex = String(fillValue).split(" ")[0];
-      const alpha = String(fillValue).includes("@")
-        ? parseFloat(String(fillValue).split("@")[1]) / 100
-        : 1;
-
-      return { hex, alpha, count };
-    })
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 10);
-
-   // --- Palette source: only visible RAW fills ---
-  const paletteSource = visible.filter(
-    (i) => i.fillSourceKind === "RAW" && i.fillValue
-  );
-
-
- const paletteHtml = top.length
-   ? `
-    <div style="margin:10px 0 12px;">
-      <div style="font-weight:700; margin-bottom:6px;">Top fill colors</div>
-      ${top
-        .map((c) => {
-          const pct = Math.round((c.alpha ?? 1) * 100);
-          return `
-            <div class="issue-meta" style="margin-top:4px;">
-              <span class="fill-row">
-                <span class="fill-swatch" style="background:${c.hex}"></span>
-                ${c.hex}${pct !== 100 ? ` @ ${pct}%` : ""} · ${c.count}
-              </span>
-            </div>
-          `;
-        })
-        .join("")}
-    </div>
-  `
-  : "";
 
 const filtersLabel =
   (state.selectedType !== "ALL"
     ? ` · type: <b>${state.selectedType}</b>`
     : "") +
-  (state.selectedSource !== "ALL"
+  (isFillProperty && state.selectedSource !== "ALL"
     ? ` · source: <b>${state.selectedSource}</b>`
     : "") +
-  (state.selectedFillState !== "ALL"
+  (isFillProperty && state.selectedFillState !== "ALL"
     ? ` · fill state: <b>${state.selectedFillState}</b>`
     : "");
 
