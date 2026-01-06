@@ -553,14 +553,22 @@ const domainIssues = issuesWithDomain.filter(
   (i) => i.issueDomain === state.selectedProperty
 );
 
-if (state.selectedProperty !== "FILL") {
-  renderControls(allIssues);
+renderControls(issuesWithDomain);
+
+
+const isFillLikeUI =
+  state.selectedProperty === "FILL" || state.selectedProperty === "STROKE";
+
+if (!isFillLikeUI) {
   out.textContent = `Property=${state.selectedProperty}: UI домена пока не реализован (заглушка). Issues: ${domainIssues.length}`;
   return;
 }
 
-// Fill mode: домен уже ограничен issueDomain === "FILL"
+
+// FILL-like UI: и для FILL, и для STROKE — один и тот же рендер
 const fillIssues = domainIssues;
+
+
 
 
 // фильтруем

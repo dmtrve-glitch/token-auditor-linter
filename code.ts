@@ -6,7 +6,11 @@ type Issue = {
     | "fill-not-variable"
     | "fill-is-style"
     | "fill-is-variable"
-    | "stroke-not-variable";
+    | "stroke-not-variable"
+    | "stroke-is-style"
+    | "stroke-is-variable"
+
+
   message: string;
   nodeId: string;
   nodeName: string;
@@ -19,6 +23,7 @@ type Issue = {
   fillStyleName?: string;
   fillStyleSource?: "LOCAL" | "EXTERNAL";
   fillVariableName?: string;
+  fillVariableId?: string;
   fillVariableSource?: "LOCAL" | "EXTERNAL";
   fillSourceKind?: "RAW" | "STYLE" | "VARIABLE";
 
@@ -179,7 +184,9 @@ type RawSuggestion = {
   id: string;
   name: string;
   distance: number;
+  rgba?: RGBAColor; // чтобы UI мог рисовать реальный свотч кандидата
 };
+
 
 type RawSuggestionsByHex = Record<string, RawSuggestion[]>;
 
@@ -253,7 +260,6 @@ function collectNodesDeep(nodes: readonly SceneNode[]): SceneNode[] {
 function toHex01(v: number) {
   return Math.round(v * 255).toString(16).padStart(2, "0");
 }
-
 function formatSolidPaint(p: SolidPaint): string {
   const { r, g, b } = p.color;
   const opacity = p.opacity ?? 1;
@@ -262,7 +268,6 @@ function formatSolidPaint(p: SolidPaint): string {
   if (opacity < 1) s += ` @ ${Math.round(opacity * 100)}%`;
   return s;
 }
-
 type RawColor = {
   hex: string;      // "#RRGGBB"
   alpha: number;    // 0..1
@@ -327,6 +332,35 @@ function describePrimaryFill(fills: readonly Paint[]) {
 
   // на будущее: GRADIENT_* / VIDEO и т.п.
   return { fillValue: p.type.toLowerCase(), fillEnabled };
+}
+function isMixed(v: unknown): v is typeof figma.mixed {
+  return v === figma.mixed;
+}
+// ============================================================
+// 2.5) Small helpers (micro-refactor before NUMERIC)
+// ============================================================
+function getFirstSolid(paints: readonly Paint[]): SolidPaint | undefined {
+  return (paints || []).find((p) => p?.type === "SOLID") as SolidPaint | undefined;
+}
+
+function getVarIdFromSolidColor(solid: SolidPaint): string | undefined {
+  const alias = (solid as any)?.boundVariables?.color;
+  const id = alias?.id;
+  return typeof id === "string" ? id : undefined;
+}
+
+function resolveVariableMeta(varId: string): {
+  fillVariableName: string;
+  fillVariableSource: "LOCAL" | "EXTERNAL";
+} {
+  const fillVariableSource: "LOCAL" | "EXTERNAL" =
+    localVariableIds.has(varId) ? "LOCAL" : "EXTERNAL";
+
+  const fillVariableName =
+    variableNameById.get(varId) ??
+    (fillVariableSource === "EXTERNAL" ? "(external variable)" : "(local variable)");
+
+  return { fillVariableName, fillVariableSource };
 }
 
 //делают объект Issue “по шаблону”
@@ -398,6 +432,48 @@ function checkFillIsStyle(node: SceneNode): Issue[] {
     }),
   ];
 }
+// возвращает список проблем, если у ноды stroke имеет style
+function checkStrokeIsStyle(node: SceneNode): Issue[] {
+  // stroke поддерживаем на тех же типах, где в принципе бывает stroke
+  if (!("strokeStyleId" in node)) return [];
+  if (!node.strokeStyleId || isMixed(node.strokeStyleId)) return [];
+
+
+  const fillStyleSource: "LOCAL" | "EXTERNAL" =
+    localPaintStyleIds.has(node.strokeStyleId) ? "LOCAL" : "EXTERNAL";
+
+  const fillStyleName =
+    styleNameById.get(node.strokeStyleId) ??
+    (fillStyleSource === "EXTERNAL" ? "(external style)" : "(local style)");
+
+  let fillValue: string | undefined;
+  let fillEnabled: boolean | undefined;
+
+  if ("strokes" in node) {
+    const strokes = node.strokes;
+    if (strokes && !isMixed(strokes)) {
+      const solid = (strokes as Paint[]).find(
+        (p) => p.type === "SOLID"
+      ) as SolidPaint | undefined;
+
+      if (solid) {
+        fillValue = formatSolidPaint(solid);
+        // visible=false считаем как disabled
+        fillEnabled = (solid as any).visible !== false;
+      }
+    }
+  }
+
+  return [
+    makeIssue(node, "stroke-is-style", "Stroke задан через style.", {
+      fillSourceKind: "STYLE",
+      fillValue,
+      fillEnabled,
+      fillStyleName,
+      fillStyleSource,
+    }),
+  ];
+}
 
 // Возвращает список проблем, если у ноды есть fills
 function checkFillNotVariable(node: SceneNode): Issue[] {
@@ -422,24 +498,24 @@ function checkFillNotVariable(node: SceneNode): Issue[] {
  const hasFillVarBinding = Boolean(node.boundVariables?.fills);
 if (hasFillVarBinding) {
   let fillVariableName: string | undefined = undefined;
-  let fillVariableSource: "LOCAL" | "EXTERNAL" | undefined = undefined;
+let fillVariableSource: "LOCAL" | "EXTERNAL" | undefined = undefined;
 
-  try {
-    const bindings = node.boundVariables?.fills;
-    const first = Array.isArray(bindings) ? bindings[0] : undefined;
+try {
+  const bindings = node.boundVariables?.fills;
+  const first = Array.isArray(bindings) ? bindings[0] : undefined;
 
-    const varId =
-      first && typeof first === "object" ? (first as any).id : undefined;
+  const varId =
+    first && typeof first === "object" ? (first as any).id : undefined;
 
-    if (typeof varId === "string") {
-      fillVariableSource = localVariableIds.has(varId) ? "LOCAL" : "EXTERNAL";
-      fillVariableName =
-        variableNameById.get(varId) ??
-        (fillVariableSource === "EXTERNAL" ? "(external variable)" : "(local variable)");
-    }
-  } catch (e) {
-    // fail-safe
+  if (typeof varId === "string") {
+    const meta = resolveVariableMeta(varId);
+    fillVariableSource = meta.fillVariableSource;
+    fillVariableName = meta.fillVariableName;
   }
+} catch (e) {
+  // fail-safe
+}
+
 
   return [
     makeIssue(node, "fill-is-variable", "Fill привязан к variable.", {
@@ -451,8 +527,6 @@ if (hasFillVarBinding) {
     }),
   ];
 }
-
- 
 
   // RAW hard-coded
   return [
@@ -466,6 +540,30 @@ if (hasFillVarBinding) {
 
 // Возвращает список проблем, если у ноды есть stroke
 function checkStrokeNotVariable(node: SceneNode): Issue[] {
+
+  // DEBUG: посмотреть, где именно хранится variable binding для stroke
+try {
+  if ("strokes" in node && (node as any).strokes) {
+    const strokes = (node as any).strokes;
+    const first = Array.isArray(strokes) ? strokes[0] : undefined;
+
+    // логируем только для нод, у которых вообще есть stroke и имя похоже на тестовое
+    // (если хочешь — убери условие и будет много спама)
+    if (node.name && node.name.toLowerCase().includes("test")) {
+      console.log("[stroke-var debug]", {
+        nodeId: node.id,
+        nodeName: node.name,
+        strokeStyleId: (node as any).strokeStyleId,
+        nodeBound: (node as any).boundVariables,
+        paintBound: first?.boundVariables,
+        strokesRaw: strokes,
+      });
+    }
+  }
+} catch (e) {
+  console.log("[stroke-var debug] error", e);
+}
+
   if (!STROKE_SUPPORTED_NODE_TYPES.includes(node.type)) return [];
 
   if (!("strokes" in node)) return [];
@@ -484,15 +582,97 @@ function checkStrokeNotVariable(node: SceneNode): Issue[] {
   const solid = strokes.find((p) => p.type === "SOLID") as SolidPaint | undefined;
   if (solid) strokeValue = formatSolidPaint(solid);
 
+  const strokeEnabled =
+  solid ? ((solid as any).visible !== false) : true;
+
+// VARIABLE (аналогично fills)
+try {
+  const bindings = (node as any).boundVariables?.strokes;
+  const first = Array.isArray(bindings) ? bindings[0] : bindings;
+
+  const varId =
+    first && typeof first === "object" ? (first as any).id : undefined;
+
+  if (typeof varId === "string") {
+    const meta = resolveVariableMeta(varId);
+    const fillVariableSource = meta.fillVariableSource;
+    const fillVariableName = meta.fillVariableName;
+
+    return [
+      makeIssue(node, "stroke-is-variable", "Stroke привязан к variable.", {
+        fillSourceKind: "VARIABLE",
+        fillValue: strokeValue,
+        fillEnabled: true, // если хочешь точнее — можем вычислить visible у SOLID как в fill
+        fillVariableName,
+        fillVariableSource,
+        strokeValue,
+      }),
+    ];
+  }
+} catch (e) {
+  // fail-safe
+}
+
+// RAW hard-coded
+return [
+  makeIssue(
+    node,
+    "stroke-not-variable",
+    "Stroke не привязан к variable (hard-coded stroke).",
+    {
+      fillSourceKind: "RAW",
+      fillValue: strokeValue,
+      fillEnabled: true,
+      strokeValue,
+    }
+  ),
+];
+
+
+}
+// возвращает список проблем, если у ноды stroke имеет variable
+function checkStrokeIsVariable(node: SceneNode): Issue[] {
+  if (!("strokes" in node)) return [];
+
+  const strokes = (node as any).strokes;
+
+  // не сравниваем с figma.mixed, чтобы TS не ругался: mixed отсекаем по типу
+  if (!strokes || strokes === figma.mixed) return [];
+
+  const solid = getFirstSolid(strokes as Paint[]);
+  if (!solid) return [];
+
+  const strokeValue = formatSolidPaint(solid);
+  const fillEnabled = (solid as any).visible !== false;
+
+  // ✅ реальный кейс из твоего debug: variable лежит тут
+  const varId = getVarIdFromSolidColor(solid);
+
+  // fallback: иногда бывает на уровне node.boundVariables.strokes
+  const nodeVar = (node as any)?.boundVariables?.strokes;
+  const fallbackId = Array.isArray(nodeVar) ? nodeVar?.[0]?.id : nodeVar?.id;
+
+  const resolvedVarId =
+    varId ?? (typeof fallbackId === "string" ? fallbackId : undefined);
+
+  if (!resolvedVarId) return [];
+
+  const { fillVariableName, fillVariableSource } =
+    resolveVariableMeta(resolvedVarId);
+
   return [
-    makeIssue(
-      node,
-      "stroke-not-variable",
-      "Stroke не привязан к variable (hard-coded stroke).",
-      { strokeValue }
-    ),
+    makeIssue(node, "stroke-is-variable", "Stroke задан через variable.", {
+      fillSourceKind: "VARIABLE",
+      fillValue: strokeValue,
+      fillEnabled,
+      fillVariableName,
+      fillVariableSource,
+      fillVariableId: resolvedVarId,
+      strokeValue,
+    }),
   ];
 }
+
 
 // ============================================================
 // 4) SUMMARY: статистика для UI
@@ -610,8 +790,11 @@ figma.ui.onmessage = async (msg) => {
     for (const n of all) {
       issues.push(...checkFillIsStyle(n));
       issues.push(...checkFillNotVariable(n));
+      issues.push(...checkStrokeIsStyle(n));
       issues.push(...checkStrokeNotVariable(n));
-    }
+      issues.push(...checkStrokeIsVariable(n));
+
+      }
 
     // Top fill colors — только проблемные (из issues), без variable
     const topMap = new Map<string, number>();
@@ -635,12 +818,17 @@ figma.ui.onmessage = async (msg) => {
     if (!rgba) continue;
 
     const matches = findClosestPaletteCandidates(rgba, paletteCandidatesCache, 3);
-    rawSuggestionsByHex[rf.hex] = matches.map((m) => ({
+   rawSuggestionsByHex[rf.hex] = matches.map((m) => {
+  const cand = paletteCandidatesCache.find((c) => c.kind === m.kind && c.id === m.id);
+  return {
     kind: m.kind,
     id: m.id,
     name: m.name,
     distance: m.distance,
-  }));
+    rgba: cand?.rgba,
+  };
+});
+
 }
 
     // DEBUG: style issues created
