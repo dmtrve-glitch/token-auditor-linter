@@ -1,5 +1,11 @@
 figma.showUI(__html__, { width: 520, height: 420 });
 
+type FillSourceKind = "RAW" | "STYLE" | "VARIABLE";
+type FillSourceDetail = "DIRECT" | "STYLE_VARIABLE";
+type FillVariableSource = "LOCAL" | "EXTERNAL";
+
+
+
 type Issue = {
    ruleId:
     | "fill-not-variable"
@@ -18,8 +24,11 @@ type Issue = {
   fillStyleName?: string;
   fillStyleSource?: "LOCAL" | "EXTERNAL";
   fillVariableName?: string;
-  fillVariableSource?: "LOCAL" | "EXTERNAL";
-  fillSourceKind?: "RAW" | "STYLE" | "VARIABLE";
+  fillVariableSource?: FillVariableSource;
+  fillSourceKind?: FillSourceKind;
+  fillSourceDetail?: FillSourceDetail;
+
+
 
 };
 
@@ -27,15 +36,15 @@ figma.notify("Token Auditor & Linter: запустился ✅");
 
 let localPaintStyleIds: Set<string> = new Set();
 let styleNameById: Map<string, string> = new Map();
+let styleUsesVariableById: Map<string, boolean> = new Map();
 let localVariableIds: Set<string> = new Set();
 let variableNameById: Map<string, string> = new Map();
 let paletteCandidatesCache: PaletteCandidate[] = [];
 
-
 type RGBAColor = { r: number; g: number; b: number; a: number };
-
+type CandidateKind = "STYLE" | "VARIABLE";
 type PaletteCandidate = {
-  kind: "STYLE" | "VARIABLE";
+  kind: CandidateKind;
   id: string;
   name: string;
   rgba: RGBAColor ;
@@ -100,15 +109,6 @@ async function getLocalPaletteCandidates(): Promise<PaletteCandidate[]> {
   return out;
 }
 
-// Приводим RGBA (0..1) к стабильному строковому ключу
-// Используем округление до 0–255, alpha тоже учитываем
-function rgbaToKey(c: RGBAColor): string {
-  const r = Math.round(c.r * 255);
-  const g = Math.round(c.g * 255);
-  const b = Math.round(c.b * 255);
-  const a = Math.round(c.a * 255);
-  return `${r},${g},${b},${a}`;
-}
 
 // Извлекаем RGBAColor из RAW fill
 // IMAGE сюда не должен доходить — его мы не матчим
@@ -124,12 +124,8 @@ function extractRGBAFromRawFill(fill: Paint): RGBAColor | null {
   };
 }
 
-type PaletteMatch = {
-  kind: "STYLE" | "VARIABLE";
-  id: string;
-  name: string;
-  distance: number;
-};
+type PaletteMatch = PaletteCandidate & { distance: number };
+
 
 function srgbToLinear(c: number): number {
   // c в диапазоне 0..1
@@ -138,22 +134,53 @@ function srgbToLinear(c: number): number {
 }
 
 function rgbaDistance(a: RGBAColor, b: RGBAColor): number {
-  // сравниваем в linear RGB, alpha оставляем как есть (0..1)
-  const ar = srgbToLinear(a.r);
-  const ag = srgbToLinear(a.g);
-  const ab = srgbToLinear(a.b);
+  try {
+    // Convert sRGB [0..1] -> linear
+    const cbrt = (x: number) => (x < 0 ? -Math.pow(-x, 1 / 3) : Math.pow(x, 1 / 3));
+    const norm = (x: number) => (x > 1 ? x / 255 : x);
+    const srgbToLinear = (x: number) =>
+    x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
 
-  const br = srgbToLinear(b.r);
-  const bg = srgbToLinear(b.g);
-  const bb = srgbToLinear(b.b);
+    // Linear RGB -> OKLab (approx, standard matrix)
+    const rgbToOKLab = (c: RGBAColor) => {
+    const r = srgbToLinear(norm(c.r));
+    const g = srgbToLinear(norm(c.g));
+    const b2 = srgbToLinear(norm(c.b));
 
-  const dr = ar - br;
-  const dg = ag - bg;
-  const db = ab - bb;
-  const da = a.a - b.a;
+    const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b2;
+    const m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b2;
+    const s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b2;
 
-  // масштабирую на 1000 просто чтобы distance был “человеческим” числом, порядок не важен
-  return Math.sqrt(dr * dr + dg * dg + db * db + da * da) * 1000;
+    const l_ = cbrt(l);
+    const m_ = cbrt(m);
+    const s_ = cbrt(s);
+
+
+    return {
+      L: 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+      a: 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+      b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+      alpha: c.a,
+    };
+  };
+
+  const A = rgbToOKLab(a);
+  const B = rgbToOKLab(b);
+
+  // Weighted distance: OKLab euclidean + alpha penalty
+  const dL = A.L - B.L;
+  const da = A.a - B.a;
+  const db = A.b - B.b;
+  const dColor = Math.sqrt(dL * dL + da * da + db * db);
+
+  const dAlpha = Math.abs((A.alpha ?? 1) - (B.alpha ?? 1));
+
+  return dColor + dAlpha * 0.25;
+    } catch (e) {
+    console.log("[rgbaDistance] error", e, a, b);
+    return 1e9;
+  }
+
 }
 
 
@@ -168,17 +195,13 @@ function findClosestPaletteCandidates(
       id: c.id,
       name: c.name,
       distance: rgbaDistance(raw, c.rgba),
+      rgba: c.rgba,
     }))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, limit);
 }
 
-type RawSuggestion = {
-  kind: "STYLE" | "VARIABLE";
-  id: string;
-  name: string;
-  distance: number;
-};
+type RawSuggestion = Omit<PaletteMatch, "rgba"> & { rgba?: RGBAColor };
 
 type RawSuggestionsByHex = Record<string, RawSuggestion[]>;
 
@@ -262,43 +285,12 @@ function formatSolidPaint(p: SolidPaint): string {
   return s;
 }
 
-type RawColor = {
-  hex: string;      // "#RRGGBB"
-  alpha: number;    // 0..1
-  count: number;    // сколько раз встретилось
-};
+
 function solidToHex(p: SolidPaint): string {
   const { r, g, b } = p.color;
   return `#${toHex01(r)}${toHex01(g)}${toHex01(b)}`.toUpperCase();
 }
-function aggregateSolidFills(nodes: SceneNode[]): RawColor[] {
-  const map = new Map<string, RawColor>();
 
-  for (const node of nodes) {
-    if (!("fills" in node)) continue;
-
-    const fills = node.fills;
-    if (fills === figma.mixed) continue;
-    if (!Array.isArray(fills) || fills.length === 0) continue;
-
-    for (const paint of fills) {
-      if (!paint) continue;
-      if (paint.type !== "SOLID") continue;
-
-      const alpha = paint.opacity ?? 1;
-      if (alpha <= 0) continue;
-
-      const hex = solidToHex(paint);
-      const key = `${hex}@${Math.round(alpha * 100)}`;
-
-      const existing = map.get(key);
-      if (existing) existing.count += 1;
-      else map.set(key, { hex, alpha, count: 1 });
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => b.count - a.count);
-}
 function ruleIdToDomain(ruleId: Issue["ruleId"]): Issue["issueDomain"] {
   if (ruleId.startsWith("stroke-")) return "STROKE";
   if (ruleId.startsWith("fill-")) return "FILL";
@@ -390,6 +382,7 @@ function checkFillIsStyle(node: SceneNode): Issue[] {
   return [
     makeIssue(node, "fill-is-style", "Fill задан через style.", {
       fillSourceKind: "STYLE",
+      fillSourceDetail: styleUsesVariableById.get(node.fillStyleId) ? "STYLE_VARIABLE" : "DIRECT",
       fillValue,
       fillEnabled,
       fillStyleName,
@@ -580,10 +573,15 @@ figma.ui.onmessage = async (msg) => {
       (await figma.getLocalPaintStylesAsync()).map((s) => s.id)
     );
     styleNameById = new Map();
+    styleUsesVariableById = new Map();
+
 
     for (const s of await figma.getLocalPaintStylesAsync()) {
     styleNameById.set(s.id, s.name);
+    const usesVar = (s.paints ?? []).some((p) => Boolean((p as any).boundVariables?.color));
+    styleUsesVariableById.set(s.id, usesVar);
     }
+    
     const localVars = await figma.variables.getLocalVariablesAsync();
     localVariableIds = new Set(localVars.map((v) => v.id));
     variableNameById = new Map(localVars.map((v) => [v.id, v.name]));
@@ -630,7 +628,19 @@ figma.ui.onmessage = async (msg) => {
    const rawSuggestionsByHex: RawSuggestionsByHex = {};
 
    for (const rf of rawFills) {
-    const rgba = hexToRGBAColor(rf.hex);
+    const rawText = String(rf.hex ?? "").trim();
+    const [hexPartRaw, atPartRaw] = rawText.split("@");
+    const hexPart = String(hexPartRaw ?? "").trim();
+    const rgbaBase = hexToRGBAColor(hexPart);
+    if (!rgbaBase) continue;
+
+    const alpha = atPartRaw
+  ? Math.max(0, Math.min(1, parseFloat(String(atPartRaw).replace("%", "").trim()) / 100))
+  : rgbaBase.a;
+
+    const rgba: RGBAColor = { r: rgbaBase.r, g: rgbaBase.g, b: rgbaBase.b, a: alpha };
+
+
     if (!rgba) continue;
 
     const matches = findClosestPaletteCandidates(rgba, paletteCandidatesCache, 3);
@@ -638,6 +648,8 @@ figma.ui.onmessage = async (msg) => {
     kind: m.kind,
     id: m.id,
     name: m.name,
+    rgba: m.rgba,
+    
     distance: m.distance,
   }));
 }
