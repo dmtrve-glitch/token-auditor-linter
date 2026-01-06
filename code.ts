@@ -1,5 +1,14 @@
 figma.showUI(__html__, { width: 520, height: 420 });
 
+<<<<<<< Updated upstream
+=======
+type FillSourceKind = "RAW" | "STYLE" | "VARIABLE";
+type FillSourceDetail = "DIRECT" | "STYLE_VARIABLE";
+type FillVariableSource = "LOCAL" | "EXTERNAL";
+
+
+
+>>>>>>> Stashed changes
 type Issue = {
    ruleId:
     | "fill-not-variable"
