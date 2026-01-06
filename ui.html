@@ -204,6 +204,55 @@
   border-left: 2px solid rgba(0,0,0,.08);
 }
 
+.match-toggle{
+  margin-left: auto;
+  font-weight: 500;
+  color: rgba(0,0,0,.45);
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+.match-toggle:hover{
+  background: rgba(0,0,0,.04);
+  color: rgba(0,0,0,.6);
+}
+
+.matches-panel{
+  margin-top: 10px;
+  background: rgba(0,0,0,.02);
+  border: 1px solid rgba(0,0,0,.06);
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.matches-row{
+  display:flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.match-item{
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  min-width: 70px;
+}
+
+.cmp-swatch{
+  width: 44px;
+  height: 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(0,0,0,.10);
+  box-sizing: border-box;
+}
+
+.match-name{
+  font-size: 12px;
+  color: rgba(0,0,0,.75);
+  white-space: nowrap;
+}
+
 
 
     </style>
@@ -330,9 +379,15 @@ function groupByFillVariableName(list) {
   return [...map.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
 }
 
-function normalize(s) {
-return String(s ?? "").toLowerCase().trim();
- }
+function rgbaToCss(rgba) {
+  if (!rgba) return "";
+  const r = Math.round((rgba.r ?? 0) * 255);
+  const g = Math.round((rgba.g ?? 0) * 255);
+  const b = Math.round((rgba.b ?? 0) * 255);
+  const a = rgba.a ?? 1;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 
 function renderControls(allIssues) {
   const issuesWithDomain = allIssues.map((i) => ({
@@ -530,57 +585,6 @@ if (state.selectedFillState !== "ALL") {
   });
 }
 
-// --- Palette (Top fill colors) — based on visible RAW issues only ---
-  const paletteMap = new Map();
-
-  for (const i of visible) {
-    if (i.fillSourceKind !== "RAW" || !i.fillValue) continue;
-
-    paletteMap.set(
-      i.fillValue,
-      (paletteMap.get(i.fillValue) ?? 0) + 1
-    );
-  }
-
-  const top = [...paletteMap.entries()]
-    .map(([fillValue, count]) => {
-      const hex = String(fillValue).split(" ")[0];
-      const alpha = String(fillValue).includes("@")
-        ? parseFloat(String(fillValue).split("@")[1]) / 100
-        : 1;
-
-      return { hex, alpha, count };
-    })
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 10);
-
-   // --- Palette source: only visible RAW fills ---
-  const paletteSource = visible.filter(
-    (i) => i.fillSourceKind === "RAW" && i.fillValue
-  );
-
-
- const paletteHtml = top.length
-   ? `
-    <div style="margin:10px 0 12px;">
-      <div style="font-weight:700; margin-bottom:6px;">Top fill colors</div>
-      ${top
-        .map((c) => {
-          const pct = Math.round((c.alpha ?? 1) * 100);
-          return `
-            <div class="issue-meta" style="margin-top:4px;">
-              <span class="fill-row">
-                <span class="fill-swatch" style="background:${c.hex}"></span>
-                ${c.hex}${pct !== 100 ? ` @ ${pct}%` : ""} · ${c.count}
-              </span>
-            </div>
-          `;
-        })
-        .join("")}
-    </div>
-  `
-  : "";
-
 const filtersLabel =
   (state.selectedType !== "ALL"
     ? ` · type: <b>${state.selectedType}</b>`
@@ -601,7 +605,6 @@ const filtersLabel =
      <span style="opacity:.7;">${filtersLabel}</span>
      <span style="opacity:.7;"> (nodes scanned: ${summary?.total ?? "?"})</span>
    </div>
-    ${paletteHtml}
    `;
 
     // группировка: SourceKind → Type → Node
@@ -659,13 +662,34 @@ for (const [groupKey, issues] of groups) {
     const fillText = String(groupKey);
     const hex = fillText.split(" ")[0];
     const suggestions = (state.rawSuggestionsByHex && state.rawSuggestionsByHex[hex]) || [];
-    const suggestionsHtml = suggestions.length
-    ? `<div class="suggestions">
-      ${suggestions.map((s) =>
-        `<span class="s-chip"><span class="s-kind">${s.kind}</span><span class="s-name">${s.name}</span></span>`
-      ).join("")}
-     </div>`
+    const rawHex = hex;
+  const matchCount = suggestions.length;
+
+const matchToggleHtml = matchCount
+  ? `<span class="match-toggle" data-action="toggle-matches" title="Show/hide matches">
+       Show variable match
+     </span>`
   : "";
+
+const matchesPanelHtml = matchCount
+  ? `<div class="matches-panel" data-role="matches" style="display:none;">
+      <div class="matches-row">
+        ${suggestions
+          .map((s) => {
+            const candCss = rgbaToCss(s.rgba) || rawHex;
+            // сравнение "raw vs candidate" одним свотчем (split)
+            return `
+              <div class="match-item" title="${s.name}">
+                <span class="cmp-swatch" style="background:linear-gradient(90deg, ${rawHex} 0 50%, ${candCss} 50% 100%);"></span>
+                <span class="match-name">${s.name}</span>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    </div>`
+  : "";
+
 
 section.innerHTML = `
   <div class="group-title raw-color-title indent-1" style="font-weight:600; cursor:pointer; user-select:none;">
@@ -678,8 +702,9 @@ section.innerHTML = `
             ${fillText}
             <span class="count-pill">${issues.length}</span>
           </span>
+          ${matchToggleHtml}
         </div>
-        ${suggestionsHtml}
+        ${matchesPanelHtml}
       </div>
     </div>
   </div>
@@ -687,10 +712,26 @@ section.innerHTML = `
 `;
 
 
+
     // collapse/expand by click
     const titleEl = section.querySelector(".raw-color-title");
     const bodyEl = section.querySelector(".raw-color-body");
     const twistyEl = section.querySelector(".twisty");
+    const toggleEl = section.querySelector('[data-action="toggle-matches"]');
+    const matchesEl = section.querySelector('[data-role="matches"]');
+
+    if (toggleEl && matchesEl) {
+    toggleEl.style.cursor = "pointer";
+    toggleEl.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const isHidden = matchesEl.style.display === "none";
+    matchesEl.style.display = isHidden ? "" : "none";
+    toggleEl.textContent = isHidden ? "Hide variable match" : "Show variable match";
+    };
+    }
+
 
 if (titleEl && bodyEl && twistyEl) {
   // default collapse for RAW colors
@@ -713,6 +754,8 @@ if (titleEl && bodyEl && twistyEl) {
   titleEl.onclick = (e) => {
     // если кликнули по стрелке — ничего не делаем (её обработчик выше)
     if (e.target === twistyEl) return;
+    if (e.target.closest && e.target.closest('[data-action="toggle-matches"]')) return;
+
 
     e.preventDefault();
     e.stopPropagation();
@@ -736,14 +779,17 @@ if (titleEl && bodyEl && twistyEl) {
         ? issues[0]?.fillVariableSource
         : undefined;
 
+  const groupHex = issues[0]?.fillValue ? String(issues[0].fillValue).split(" ")[0] : null;
+ const swatchHtml = groupHex ? `<span class="fill-swatch" style="display:inline-block; background:${groupHex}; margin-right:6px;"></span>` : "";
+
   section.innerHTML = `
-    <div class="group-title named-group-title" style="font-weight:600; cursor:pointer; user-select:none;">
+      <div class="group-title named-group-title indent-1" style="font-weight:600; cursor:pointer; user-select:none;">
       <span class="twisty" style="display:inline-block; width:16px;">▾</span>
-      ${groupKey}
-      ${sourceLabel ? `<span style="opacity:.7;"> · ${sourceLabel}</span>` : ""}
+      ${swatchHtml}${groupKey}
+      ${sourceLabel ? `<span style="opacity:.7;"> · ${sourceLabel}</span>` : ""}${sourceKind === "STYLE" && issues[0]?.fillSourceDetail === "STYLE_VARIABLE" ? `<span style="opacity:.7;"> · style→variable</span>` : ""}
       <small style="margin-left:6px;">${issues.length}</small>
     </div>
-    <div class="named-group-body"></div>
+    <div class="named-group-body nested-block"></div>
   `;
 
   const titleEl = section.querySelector(".named-group-title");
@@ -777,6 +823,8 @@ if (titleEl && bodyEl && twistyEl) {
         "*"
       );
     };
+
+
 
     titleEl.title = "Click title: select all · Click arrow: collapse/expand";
   }
