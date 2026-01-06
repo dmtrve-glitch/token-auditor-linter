@@ -12,7 +12,7 @@
       .issue { display:flex; gap:8px; align-items:center; padding:10px; background:#f6f6f6; border-radius:10px; margin-bottom:8px; }
       .issue-main { flex:1; }
       .issue-title { font-weight:600; margin-bottom:4px; }
-      .issue-meta { opacity:0.75; font-size:11px; }
+      .issue-meta { opacity:1; font-size:11px; }
       .issue button { padding:6px 8px; }
       .fill-row {  display: inline-flex;  align-items: center;  gap: 6px;}
       .fill-swatch { width: 12px;height: 12px;border-radius: 3px;border: 1px solid rgba(0,0,0,0.15);box-sizing: border-box;}
@@ -386,6 +386,38 @@ function rgbaToCss(rgba) {
   const b = Math.round((rgba.b ?? 0) * 255);
   const a = rgba.a ?? 1;
   return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+function renderColorLine(label, text) {
+  const t = (text ?? "—");
+  if (t === "—") {
+    return `
+      <div class="issue-meta" style="margin-top:4px;">
+        <span class="fill-row">
+          ${label}: —
+        </span>
+      </div>
+    `;
+  }
+  const hex = String(t).split(" ")[0];
+  return `
+    <div class="issue-meta" style="margin-top:4px;">
+      <span class="fill-row">
+        <span class="fill-swatch" style="background:${hex}"></span>
+        ${label}: ${t}
+      </span>
+    </div>
+  `;
+}
+
+function renderFillStrokeLines(issue) {
+  const fillText = issue.nodeFillValue ?? "—";
+  const strokeText = issue.nodeStrokeValue ?? "—";
+
+  const fillLabel = issue.nodeFillEnabled === false ? `${fillText} (disabled)` : fillText;
+  const strokeLabel = issue.nodeStrokeEnabled === false ? `${strokeText} (disabled)` : strokeText;
+
+  return renderColorLine("Fill", fillLabel) + renderColorLine("Stroke", strokeLabel);
 }
 
 
@@ -859,34 +891,6 @@ const target = groupBody || section;
   main.className = "issue-main";
 
   // fill строка (с квадратиком) — если есть
-    const fillLine = (issue.fillSourceKind !== "RAW" && issue.fillValue)
-    ? (() => {
-        const hex = String(issue.fillValue).split(" ")[0];
-        const nodeOpPct =
-          typeof issue.nodeOpacity === "number"
-            ? Math.round(issue.nodeOpacity * 100)
-            : 100;
-        const nodeOpText = nodeOpPct !== 100 ? ` · node ${nodeOpPct}%` : "";
-        return `
-          <div class="issue-meta" style="margin-top:6px;">
-            <span class="fill-row">
-              <span class="fill-swatch" style="background:${hex}"></span>
-              ${issue.fillValue}${nodeOpText}
-            </span>
-          </div>
-
-          ${
-            issue.fillStyleName || issue.fillStyleSource
-              ? `<div class="issue-meta" style="margin-top:4px;">
-                   Style: ${issue.fillStyleName ?? "—"} · source: ${
-                  issue.fillStyleSource ?? "—"
-                }
-                 </div>`
-              : ""
-          }
-        `;
-      })()
-    : "";
 
   main.innerHTML = `
     <div class="issue-title">
@@ -912,45 +916,38 @@ const target = groupBody || section;
             `<div class="issue-meta" style="margin-top:6px;">${i.message}</div>`
           );
 
-          if (issue.fillSourceKind === "RAW" && i.fillValue) {
-            const hex = String(i.fillValue).split(" ")[0];
+          // Consistent Fill/Stroke lines for ALL sections & domains
+          parts.push(renderFillStrokeLines(i));
+
+          // Optional style metadata
+          if (i.fillStyleName || i.fillStyleSource) {
             parts.push(`
               <div class="issue-meta" style="margin-top:4px;">
-                <span class="fill-row">
-                  <span class="fill-swatch" style="background:${hex}"></span>
-                  Fill: ${i.fillValue}
-                </span>
+                Style: ${i.fillStyleName ?? "—"} · source: ${i.fillStyleSource ?? "—"}
+                ${i.fillSourceDetail === "STYLE_VARIABLE" ? " · style→variable" : ""}
               </div>
             `);
           }
 
-          if (i.strokeValue) {
-            const hex = String(i.strokeValue).split(" ")[0];
+          // Optional variable metadata
+          if (i.fillVariableName || i.fillVariableSource) {
             parts.push(`
               <div class="issue-meta" style="margin-top:4px;">
-                <span class="fill-row">
-                  <span class="fill-swatch" style="background:${hex}"></span>
-                  Stroke: ${i.strokeValue}
-                </span>
+                Variable: ${i.fillVariableName ?? "—"} · source: ${i.fillVariableSource ?? "—"}
               </div>
             `);
           }
 
-          if (issue.fillSourceKind === "RAW" && (i.fillStyleName || i.fillStyleSource)) {
-  parts.push(`
-    <div class="issue-meta" style="margin-top:4px;">
-      Style: ${i.fillStyleName ?? "—"} · source: ${i.fillStyleSource ?? "—"}
-    </div>
-  `);
-}
-
-
-          return parts.join("");
+          return `
+  <div class="issue-card">
+    ${parts.join("")}
+  </div>
+`;
         })
         .join("")}
     </div>
 
-    ${fillLine}
+    
   `;
 
   const btn = document.createElement("button");

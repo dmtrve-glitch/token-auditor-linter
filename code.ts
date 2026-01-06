@@ -17,6 +17,7 @@ type Issue = {
   nodeType: SceneNode["type"];
   issueDomain: "FILL" | "STROKE" | "NUMERIC";
   fillValue?: string;
+  nodeFillValue?: string; // реальный Fill ноды для отображения в карточке (может быть "—")
   fillEnabled?: boolean; // true = paint.visible !== false (если visible нет — считаем включенным)
   nodeOpacity?: number;
   strokeValue?: string;
@@ -26,7 +27,9 @@ type Issue = {
   fillVariableId?: string;
   fillVariableSource?: "LOCAL" | "EXTERNAL";
   fillSourceKind?: "RAW" | "STYLE" | "VARIABLE";
-
+  nodeFillEnabled?: boolean;
+  nodeStrokeValue?: string;
+  nodeStrokeEnabled?: boolean;
 };
 
 figma.notify("Token Auditor & Linter: запустился ✅");
@@ -45,7 +48,28 @@ type PaletteCandidate = {
   id: string;
   name: string;
   rgba: RGBAColor ;
+  // metadata (future: private/public collections)
+  collectionId?: string;
+  collectionName?: string;
 };
+
+function resolveStyleName(styleId: string): string | undefined {
+  const cached = styleNameById.get(styleId);
+  if (cached) return cached;
+
+  try {
+    const s = figma.getStyleById(styleId);
+    if (s && typeof s.name === "string" && s.name.trim()) {
+      styleNameById.set(styleId, s.name);
+      return s.name;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  return undefined;
+}
+
 
 function isRGBAValue(v: unknown): v is { r: number; g: number; b: number; a?: number } {
   return (
@@ -60,18 +84,52 @@ function isRGBAValue(v: unknown): v is { r: number; g: number; b: number; a?: nu
   );
 }
 
-// Берём первое доступное значение (mode) — достаточно для v0.3 read-only.
-// Позже (в v0.4+) можно будет учитывать explicit mode / consumer.
-function pickFirstModeColorValue(variable: Variable): RGBAColor | null {
+function isVariableAliasValue(v: any): v is { type: "VARIABLE_ALIAS"; id: string } {
+  return v && typeof v === "object" && v.type === "VARIABLE_ALIAS" && typeof v.id === "string";
+}
+
+async function pickFirstModeColorValue(variable: Variable, depth = 0): Promise<RGBAColor | null> {
+  if (depth > 6) return null; // защита от циклов алиасов
+
   const modeIds = Object.keys(variable.valuesByMode ?? {});
   if (modeIds.length === 0) return null;
 
-  const v = (variable.valuesByMode as any)[modeIds[0]];
-  // Если там alias — пропускаем (на v0.3 ок).
-  if (!isRGBAValue(v)) return null;
+  const modeId = modeIds[0];
+  const v = (variable.valuesByMode as any)[modeId];
 
-  return { r: v.r, g: v.g, b: v.b, a: typeof v.a === "number" ? v.a : 1 };
+  if (isRGBAValue(v)) {
+    return { r: v.r, g: v.g, b: v.b, a: typeof v.a === "number" ? v.a : 1 };
+  }
+
+  // NEW: resolve VARIABLE_ALIAS
+  if (isVariableAliasValue(v)) {
+    const target = await figma.variables.getVariableByIdAsync(v.id);
+    if (!target) return null;
+
+    const targetModeIds = Object.keys(target.valuesByMode ?? {});
+    if (targetModeIds.length === 0) return null;
+
+    // пробуем тот же modeId, иначе первый доступный
+    const tv =
+      (target.valuesByMode as any)[modeId] ??
+      (target.valuesByMode as any)[targetModeIds[0]];
+
+    if (isRGBAValue(tv)) {
+      return { r: tv.r, g: tv.g, b: tv.b, a: typeof tv.a === "number" ? tv.a : 1 };
+    }
+
+    if (isVariableAliasValue(tv)) {
+      const next = await figma.variables.getVariableByIdAsync(tv.id);
+      if (!next) return null;
+      return pickFirstModeColorValue(next, depth + 1);
+    }
+
+    return null;
+  }
+
+  return null;
 }
+
 
 function extractSolidFromPaintStyle(style: PaintStyle): RGBAColor | null {
   const paints = style.paints ?? [];
@@ -87,22 +145,23 @@ return { r: p.color.r, g: p.color.g, b: p.color.b, a };
 async function getLocalPaletteCandidates(): Promise<PaletteCandidate[]> {
   const out: PaletteCandidate[] = [];
 
-  // local paint styles (async API)
-  const localStyles = await figma.getLocalPaintStylesAsync();
-  for (const s of localStyles) {
-    const rgba = extractSolidFromPaintStyle(s);
-    if (!rgba) continue;
-    out.push({ kind: "STYLE", id: s.id, name: s.name, rgba });
-  }
-
   // local color variables (async API)
   const localColorVars = await figma.variables.getLocalVariablesAsync("COLOR");
-  for (const v of localColorVars) {
-    const rgba = pickFirstModeColorValue(v);
-    if (!rgba) continue;
-    out.push({ kind: "VARIABLE", id: v.id, name: v.name, rgba });
-  }
+  const collections = await figma.variables.getLocalVariableCollectionsAsync();
+  const collectionNameById = new Map(collections.map(c => [c.id, c.name]));
 
+  for (const v of localColorVars) {
+    const rgba = await pickFirstModeColorValue(v);
+    if (!rgba) continue;
+    out.push({
+  kind: "VARIABLE",
+  id: v.id,
+  name: v.name,
+  rgba,
+  collectionId: v.variableCollectionId,
+  collectionName: collectionNameById.get(v.variableCollectionId) ?? "(unknown)",
+});
+  }
   return out;
 }
 
@@ -260,6 +319,7 @@ function collectNodesDeep(nodes: readonly SceneNode[]): SceneNode[] {
 function toHex01(v: number) {
   return Math.round(v * 255).toString(16).padStart(2, "0");
 }
+
 function formatSolidPaint(p: SolidPaint): string {
   const { r, g, b } = p.color;
   const opacity = p.opacity ?? 1;
@@ -268,6 +328,7 @@ function formatSolidPaint(p: SolidPaint): string {
   if (opacity < 1) s += ` @ ${Math.round(opacity * 100)}%`;
   return s;
 }
+
 type RawColor = {
   hex: string;      // "#RRGGBB"
   alpha: number;    // 0..1
@@ -333,42 +394,64 @@ function describePrimaryFill(fills: readonly Paint[]) {
   // на будущее: GRADIENT_* / VIDEO и т.п.
   return { fillValue: p.type.toLowerCase(), fillEnabled };
 }
+
+function describePrimaryStroke(strokes: readonly Paint[]) {
+  // берём первый "живой" paint (не полностью прозрачный)
+  const p = strokes.find((x) => (x?.opacity ?? 1) > 0);
+  if (!p) return { strokeValue: undefined as string | undefined };
+
+  if (p.type === "SOLID") {
+    return { strokeValue: formatSolidPaint(p as SolidPaint) };
+  }
+
+  return { strokeValue: "(non-solid stroke)" };
+}
+
 function isMixed(v: unknown): v is typeof figma.mixed {
   return v === figma.mixed;
 }
-// ============================================================
-// 2.5) Small helpers (micro-refactor before NUMERIC)
-// ============================================================
-function getFirstSolid(paints: readonly Paint[]): SolidPaint | undefined {
-  return (paints || []).find((p) => p?.type === "SOLID") as SolidPaint | undefined;
+
+function getCardPaintInfo(
+  node: SceneNode,
+  prop: "fills" | "strokes"
+): { value: string; enabled?: boolean } {
+  try {
+    if (!(prop in node)) return { value: "—" };
+
+    const paints = (node as any)[prop] as Paint[] | typeof figma.mixed;
+    if (!paints || paints === figma.mixed) return { value: "—" };
+    if (!Array.isArray(paints) || paints.length === 0) return { value: "—" };
+
+    const p = paints[0];
+    if (!p) return { value: "—" };
+
+    const enabled = (p as any).visible !== false;
+
+    if (p.type !== "SOLID") return { value: p.type.toLowerCase(), enabled };
+
+    return { value: formatSolidPaint(p as SolidPaint), enabled };
+  } catch (e) {
+    return { value: "—" };
+  }
 }
 
-function getVarIdFromSolidColor(solid: SolidPaint): string | undefined {
-  const alias = (solid as any)?.boundVariables?.color;
-  const id = alias?.id;
-  return typeof id === "string" ? id : undefined;
+function shortStyleId(id: string): string {
+  if (!id) return "unknown";
+  // у styleId часто формат "5775:77" — его оставляем как есть
+  if (id.length <= 14) return id;
+  return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
-function resolveVariableMeta(varId: string): {
-  fillVariableName: string;
-  fillVariableSource: "LOCAL" | "EXTERNAL";
-} {
-  const fillVariableSource: "LOCAL" | "EXTERNAL" =
-    localVariableIds.has(varId) ? "LOCAL" : "EXTERNAL";
-
-  const fillVariableName =
-    variableNameById.get(varId) ??
-    (fillVariableSource === "EXTERNAL" ? "(external variable)" : "(local variable)");
-
-  return { fillVariableName, fillVariableSource };
-}
 
 //делают объект Issue “по шаблону”
 function makeBaseIssue(
   node: SceneNode,
   ruleId: Issue["ruleId"],
   message: string
-  ): Issue {
+): Issue {
+  const cardFill = getCardPaintInfo(node, "fills");
+  const cardStroke = getCardPaintInfo(node, "strokes");
+
   return {
     ruleId,
     message,
@@ -378,8 +461,14 @@ function makeBaseIssue(
     nodeType: node.type,
     nodeOpacity: "opacity" in node ? node.opacity : undefined,
 
-    };
-  }
+    // Card Truth (single source of truth for ALL cards)
+    nodeFillValue: cardFill.value,
+    nodeFillEnabled: cardFill.enabled,
+    nodeStrokeValue: cardStroke.value,
+    nodeStrokeEnabled: cardStroke.enabled,
+  };
+}
+
 function makeIssue(
   node: SceneNode,
   ruleId: Issue["ruleId"],
@@ -405,9 +494,12 @@ function checkFillIsStyle(node: SceneNode): Issue[] {
   const fillStyleSource: "LOCAL" | "EXTERNAL" =
     localPaintStyleIds.has(node.fillStyleId) ? "LOCAL" : "EXTERNAL";
 
-  const fillStyleName =
-    styleNameById.get(node.fillStyleId) ??
-    (fillStyleSource === "EXTERNAL" ? "(external style)" : "(local style)");
+  const resolved = resolveStyleName(node.fillStyleId);
+
+  const fillStyleName =  resolved ??
+  (fillStyleSource === "EXTERNAL"
+    ? `(external style · ${shortStyleId(node.fillStyleId)})`
+    : "(local style)");
 
   // 10T: достаём текущий SOLID fill (если доступен) для отображения/статистики
   let fillValue: string | undefined;
@@ -442,9 +534,13 @@ function checkStrokeIsStyle(node: SceneNode): Issue[] {
   const fillStyleSource: "LOCAL" | "EXTERNAL" =
     localPaintStyleIds.has(node.strokeStyleId) ? "LOCAL" : "EXTERNAL";
 
-  const fillStyleName =
-    styleNameById.get(node.strokeStyleId) ??
-    (fillStyleSource === "EXTERNAL" ? "(external style)" : "(local style)");
+  const resolved = resolveStyleName(node.strokeStyleId);
+
+const fillStyleName =
+  resolved ??
+  (fillStyleSource === "EXTERNAL"
+    ? `(external style · ${shortStyleId(node.strokeStyleId)})`
+    : "(local style)");
 
   let fillValue: string | undefined;
   let fillEnabled: boolean | undefined;
@@ -498,24 +594,24 @@ function checkFillNotVariable(node: SceneNode): Issue[] {
  const hasFillVarBinding = Boolean(node.boundVariables?.fills);
 if (hasFillVarBinding) {
   let fillVariableName: string | undefined = undefined;
-let fillVariableSource: "LOCAL" | "EXTERNAL" | undefined = undefined;
+  let fillVariableSource: "LOCAL" | "EXTERNAL" | undefined = undefined;
 
-try {
-  const bindings = node.boundVariables?.fills;
-  const first = Array.isArray(bindings) ? bindings[0] : undefined;
+  try {
+    const bindings = node.boundVariables?.fills;
+    const first = Array.isArray(bindings) ? bindings[0] : undefined;
 
-  const varId =
-    first && typeof first === "object" ? (first as any).id : undefined;
+    const varId =
+      first && typeof first === "object" ? (first as any).id : undefined;
 
-  if (typeof varId === "string") {
-    const meta = resolveVariableMeta(varId);
-    fillVariableSource = meta.fillVariableSource;
-    fillVariableName = meta.fillVariableName;
+    if (typeof varId === "string") {
+      fillVariableSource = localVariableIds.has(varId) ? "LOCAL" : "EXTERNAL";
+      fillVariableName =
+        variableNameById.get(varId) ??
+        (fillVariableSource === "EXTERNAL" ? "(external variable)" : "(local variable)");
+    }
+  } catch (e) {
+    // fail-safe
   }
-} catch (e) {
-  // fail-safe
-}
-
 
   return [
     makeIssue(node, "fill-is-variable", "Fill привязан к variable.", {
@@ -527,6 +623,8 @@ try {
     }),
   ];
 }
+
+ 
 
   // RAW hard-coded
   return [
@@ -594,9 +692,12 @@ try {
     first && typeof first === "object" ? (first as any).id : undefined;
 
   if (typeof varId === "string") {
-    const meta = resolveVariableMeta(varId);
-    const fillVariableSource = meta.fillVariableSource;
-    const fillVariableName = meta.fillVariableName;
+    const fillVariableSource = localVariableIds.has(varId) ? "LOCAL" : "EXTERNAL";
+    const fillVariableName =
+      variableNameById.get(varId) ??
+      (fillVariableSource === "EXTERNAL"
+        ? "(external variable)"
+        : "(local variable)");
 
     return [
       makeIssue(node, "stroke-is-variable", "Stroke привязан к variable.", {
@@ -639,26 +740,37 @@ function checkStrokeIsVariable(node: SceneNode): Issue[] {
   // не сравниваем с figma.mixed, чтобы TS не ругался: mixed отсекаем по типу
   if (!strokes || strokes === figma.mixed) return [];
 
-  const solid = getFirstSolid(strokes as Paint[]);
+  const solid = (strokes as Paint[]).find(
+    (p) => p.type === "SOLID"
+  ) as SolidPaint | undefined;
+
   if (!solid) return [];
 
   const strokeValue = formatSolidPaint(solid);
   const fillEnabled = (solid as any).visible !== false;
 
   // ✅ реальный кейс из твоего debug: variable лежит тут
-  const varId = getVarIdFromSolidColor(solid);
+  const alias = (solid as any)?.boundVariables?.color;
+  const varId = alias?.id;
 
   // fallback: иногда бывает на уровне node.boundVariables.strokes
   const nodeVar = (node as any)?.boundVariables?.strokes;
   const fallbackId = Array.isArray(nodeVar) ? nodeVar?.[0]?.id : nodeVar?.id;
 
   const resolvedVarId =
-    varId ?? (typeof fallbackId === "string" ? fallbackId : undefined);
+    (typeof varId === "string" ? varId : undefined) ??
+    (typeof fallbackId === "string" ? fallbackId : undefined);
 
   if (!resolvedVarId) return [];
 
-  const { fillVariableName, fillVariableSource } =
-    resolveVariableMeta(resolvedVarId);
+  const fillVariableSource: "LOCAL" | "EXTERNAL" =
+    localVariableIds.has(resolvedVarId) ? "LOCAL" : "EXTERNAL";
+
+  const fillVariableName =
+    variableNameById.get(resolvedVarId) ??
+    (fillVariableSource === "EXTERNAL"
+      ? "(external variable)"
+      : "(local variable)");
 
   return [
     makeIssue(node, "stroke-is-variable", "Stroke задан через variable.", {
@@ -772,7 +884,17 @@ figma.ui.onmessage = async (msg) => {
     const paletteCandidates = await getLocalPaletteCandidates();
     paletteCandidatesCache = paletteCandidates;
      
-      console.log("[scan] paletteCandidates:", paletteCandidates.length);
+    console.log("[paletteCandidates] total =", paletteCandidates.length);
+console.log(
+  "[paletteCandidates] sample =",
+  paletteCandidates.slice(0, 10).map((c: any) => ({
+    kind: c.kind,
+    id: c.id,
+    name: c.name,
+    rgba: c.rgba,
+  }))
+);
+
 
     const selection = figma.currentPage.selection;
     const roots = selection.length > 0 ? selection : figma.currentPage.children;
@@ -808,7 +930,6 @@ figma.ui.onmessage = async (msg) => {
 
     const rawFills = Array.from(topMap.entries())
    .sort((a, b) => b[1] - a[1])
-   .slice(0, 30)
    .map(([hex, count]) => ({ hex, count }));
 
    const rawSuggestionsByHex: RawSuggestionsByHex = {};
@@ -816,6 +937,12 @@ figma.ui.onmessage = async (msg) => {
    for (const rf of rawFills) {
     const rgba = hexToRGBAColor(rf.hex);
     if (!rgba) continue;
+
+    if (!rgba) {
+  console.log("[match] rawRGBA=null for", rf.hex);
+} else if (!paletteCandidates.length) {
+  console.log("[match] no candidates for", rf.hex);
+}
 
     const matches = findClosestPaletteCandidates(rgba, paletteCandidatesCache, 3);
    rawSuggestionsByHex[rf.hex] = matches.map((m) => {
